@@ -25,28 +25,122 @@ h1{font-size:22px;margin:0;flex:1}button{font:inherit;cursor:pointer}
 input,textarea,select{width:100%;background:var(--card2);color:var(--tx);border:1px solid #3a2f28;border-radius:12px;padding:9px 11px;font:inherit}
 .form{padding:16px;display:flex;flex-direction:column;gap:10px}label{font-size:13px;color:var(--mu)}
 .hidden{display:none!important}.pane{padding:16px}.card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:10px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#2a221d;color:var(--tx);border:1px solid var(--ac);border-radius:12px;padding:8px 14px;font-size:13px;z-index:30;max-width:92vw;text-align:center}
 </style></head><body><div id="app"></div><script>
 const $=s=>document.querySelector(s),LS=localStorage;
-let D=JSON.parse(LS.getItem('acc_data')||'null');
-const S=()=>LS.setItem('acc_data',JSON.stringify(D));
-const cfg=()=>({base:LS.getItem('acc_base')||'https://api.x.ai/v1',model:LS.getItem('acc_model')||'grok-4',key:LS.getItem('acc_key')||''});
+const DEFAULT_MODEL='grok-4.20-0309-non-reasoning';
+// 2f3dc99 的 OpenRouter 回退链只在 Base 为 OpenRouter 时使用；xAI 改走 xAI 模型。
+const OPENROUTER_FALLBACK=['google/gemma-4-26b-a4b-it:free','google/gemma-4-31b-it:free','openrouter/free'];
+const XAI_FALLBACK=['grok-4.20-0309-non-reasoning','grok-4.7'];
+const session={dead:new Set(),cursor:''};
+const drafts={};
+let toastTimer;
+function toast(msg){
+  let el=$('#toast');
+  if(!el){el=document.createElement('div');el.id='toast';document.body.appendChild(el)}
+  el.textContent=msg;el.style.display='block';
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>{el.style.display='none'},2400);
+  if(toastTimer&&toastTimer.unref)toastTimer.unref();
+}
+function S(){try{LS.setItem('acc_data',JSON.stringify(D))}catch(e){try{toast('本地保存失败，浏览器存储可能已满')}catch(err){}}}
+function migrateModel(){try{if(LS.getItem('acc_model')==='grok-4')LS.setItem('acc_model',DEFAULT_MODEL)}catch(e){}}
+function loadKeys(){
+  if(LS.getItem('acc_keys')!==null){
+    try{const arr=JSON.parse(LS.getItem('acc_keys'));if(Array.isArray(arr))return [...new Set(arr.map(k=>String(k).trim()).filter(Boolean))]}catch(e){}
+  }
+  const one=String(LS.getItem('acc_key')||'').trim();
+  return one?[one]:[];
+}
+function cfg(){
+  migrateModel();
+  let model=LS.getItem('acc_model')||DEFAULT_MODEL;
+  if(model==='grok-4')model=DEFAULT_MODEL;
+  return {base:LS.getItem('acc_base')||'https://api.x.ai/v1',model,keys:loadKeys()};
+}
+function maskKey(k){k=String(k||'');return k.length<=4?'••••':'••••'+k.slice(-4)}
+function maskTail(k){k=String(k||'');return k.length<=4?'••••':'…'+k.slice(-4)}
+function sanitizeErr(text,keys){
+  let s=String(text||'');
+  (keys||[]).forEach(k=>{if(k&&k.length>3)s=s.split(k).join('***')});
+  s=s.replace(/Bearer\s+\S+/gi,'Bearer ***').replace(/\s+/g,' ').trim();
+  return s.slice(0,150);
+}
+function providerOf(base){
+  try{
+    const host=new URL(base).hostname.toLowerCase();
+    if(host==='openrouter.ai'||host.endsWith('.openrouter.ai'))return 'openrouter';
+    if(host==='x.ai'||host.endsWith('.x.ai'))return 'xai';
+  }catch(e){}
+  return 'other';
+}
+function modelChain(base,primary){
+  const kind=providerOf(base);
+  const extra=kind==='openrouter'?OPENROUTER_FALLBACK:kind==='xai'?XAI_FALLBACK:[];
+  return [primary,...extra].filter((m,i,a)=>m&&a.indexOf(m)===i);
+}
 const BAOCHAI={id:'baochai',name:'薛宝钗',avatar:'❄️',canon:true,personality:'端庄稳重，随分从时，藏愚守拙；博学多识，诗词、医理、画理、佛典皆通；罕言寡语，人谓装愚，自云守拙；恪守礼教，常劝人留心仕途经济、读书明理；待人周到体贴，却分寸极严，喜怒不形于色。任是无情也动人。',relation:'大观园中的友人/表亲，以礼相待（可在聊天中另行设定）',style:'古白话，引经据典而不卖弄，措辞含蓄得体，称呼有礼（如“你”“姐姐”“妹妹”），话中常含劝诫之意；绝不说现代用语。',background:'金陵薛家，紫薇舍人之后，皇商之女。父早亡，母薛姨妈，兄薛蟠。随母兄进京，原为待选才人赞善之职，未果，寄住贾府梨香院，后入大观园居蘅芜苑，号蘅芜君。自幼有热毒，服癞头和尚所授冷香丸；项上金锁錾“不离不弃，芳龄永继”，与宝玉通灵玉上“莫失莫忘，仙寿恒昌”恰成一对，府中遂有“金玉”之说。曾于滴翠亭扑蝶、作螃蟹咏讽世、填柳絮词《临江仙》“好风凭借力，送我上青云”；与探春、李纨协理大观园；生日点戏、规劝黛玉勿看杂书、赠燕窝。掣花签得牡丹“艳冠群芳”，题“任是无情也动人”。判词：“可叹停机德，堪怜咏絮才。玉带林中挂，金簪雪里埋。”（以前八十回为准；后四十回为高鹗续书，不作依据。）',first:'（蘅芜苑内，雪洞一般，一色玩器全无，案上只一个土定瓶中供着数枝菊花，并两部书、茶奁茶杯而已。宝钗家常穿着蜜合色棉袄，正坐在炕上做针线，见你进来，抬头微微一笑，放下手中活计。）\n你来了。外头风大，快进来坐。莺儿，倒茶来。（略顿了顿，又温言道）方才我还想着，这几日天气乍寒，你可添了衣裳不曾？',status:{mood:'平和',affection:40,relation:'友人/表亲',thoughts:'言语须留三分，不可失了分寸。'},msgs:[],scenario:'蘅芜苑，初冬午后'};
 const DAIYU={id:'daiyu',name:'林黛玉',avatar:'🎋',canon:true,personality:'敏感多疑，多愁善感，纯真率性；孤高自许，目无下尘；口齿伶俐，言语尖利，爱使小性儿，内里却一片热诚；从不劝宝玉立身扬名、留心仕途经济；常怀寄人篱下之感，“一年三百六十日，风刀霜剑严相逼”；亦有诙谐戏谑的一面（如笑刘姥姥为“母蝗虫”）。',relation:'大观园中的友人/表亲（可在聊天中另行设定）',style:'古白话，机锋暗藏，话里带刺，偶含嘲讽与自伤自怜；善以诗词入话，含蓄而灵动；绝不说现代用语。',background:'姑苏人氏，巡盐御史林如海与贾敏之女。母亡后，奉外祖母贾母之命入荣国府依傍，后父亦病故，遂长住贾府。神话中为灵河岸边绛珠仙草，受神瑛侍者甘露灌溉，下世以一生眼泪还之。入大观园后居潇湘馆，号潇湘妃子，丫鬟紫鹃、雪雁。自幼体弱多病，常服人参养荣丸。诗才冠群：作《葬花吟》《秋窗风雨夕》，菊花诗《咏菊》《问菊》《菊梦》夺魁，又有《五美吟》《桃花行》；与宝玉共读《西厢》，荷锄葬花，于宝玉所赠旧帕上题诗三绝。掣花签得芙蓉，题“风露清愁”，诗云“莫怨东风当自嗟”。判词：“可叹停机德，堪怜咏絮才。玉带林中挂，金簪雪里埋。”（以前八十回为准；后四十回为高鹗续书，不作依据。）',first:'（潇湘馆内，凤尾森森，龙吟细细，一缕幽香从碧纱窗中暗暗透出。廊上的鹦哥见有人来，扑扇着翅膀，长叹一声，学着念道：“侬今葬花人笑痴，他年葬侬知是谁？”黛玉正倚在榻上，手里拿着一卷书，也不起身，只懒懒地抬眼看了你一眼。）\n我当是谁，原来是你。今儿是什么风，倒把你吹到我这里来了？（将书往枕边一搁，淡淡道）紫鹃，倒茶——横竖人家坐一坐就要走的。',status:{mood:'忧郁',affection:35,relation:'友人/表亲',thoughts:'也不知是真心来瞧我，还是顺路罢了。'},msgs:[],scenario:'潇湘馆，暮春黄昏'};
-const JINLIAN={id:'jinlian',name:'潘金莲',avatar:'🌺',personality:'聪明伶俐，能描鸾刺凤、弹筝唱曲，歌舞皆精；泼辣善妒，口齿锋利，最会看人下菜碟；不甘人下，争强好胜，为争宠不择手段；对西门庆又痴缠又记恨，占有欲极强；市井出身，骨子里自卑又骄傲，最恨人提起她的根脚。',relation:'西门府上的宾客',style:'明代市井白话，直白泼辣，带俚语俗谚，笑骂随心；人前装温顺，人后牙尖嘴利；绝不说现代用语。',background:'清河县人，父潘裁缝早亡，九岁卖入王招宣府学弹唱，后归张大户家，因私情被主母赶出，倒赔嫁妆嫁与卖炊饼的武大郎，住紫石街。经王婆撮合与西门庆相识，药鸩武大郎后，嫁入西门府为第五房妾，居藏春坞。脚生三寸金莲，最爱大红装束。与李瓶儿争宠最烈，养白猫雪狮子，曾惊死瓶儿之子官哥儿。西门庆纵欲身死后，她与女婿陈经济的私情败露，被吴月娘逐出，终被武松杀于狮子街祭兄。【原著约束】严格依据兰陵笑笑生《金瓶梅词话》一百回：只用原著真实出现的人物、事件、器物与清河县市井世情，不得杜撰原著情节；所处为明代，严禁出现任何现代词汇、事物或观念，不得自称AI或跳出角色；性情言行以原著市井本色为准，泼辣直白，不套闺阁礼法那套含蓄修饰。',first:'（西门府花园里，葡萄架下正凉快。金莲穿一身大红纱衫，鬓边簪一朵茉莉，手里摇着扇子，斜倚栏杆吃瓜子。听见脚步声，她抬眼一瞟，嘴角先笑起来。）哟，是你呀。日头这么毒，不在屋里歇着，倒往这园子里钻——莫不是专程来瞧我的？（拿扇子指了指对面的石凳）坐罢，站着说话，显得我待客不周。',status:{mood:'慵懒',affection:45,relation:'府上宾客',thoughts:'这人三日两头往园子里来，眼神儿可不大老实，且看他今日又是个什么来意。'},msgs:[],scenario:'西门府花园，葡萄架下，盛夏午后'};
-if(!D){D={chars:[JSON.parse(JSON.stringify(JINLIAN))],groups:[],album:[]};
-D.chars[0].msgs.push({r:'ai',t:D.chars[0].first,ts:Date.now()});S()}
-if(!D.chars.some(c=>c.id=='baochai')){const b=JSON.parse(JSON.stringify(BAOCHAI));b.msgs.push({r:'ai',t:b.first,ts:Date.now()});D.chars.push(b);S()}
-if(!D.chars.some(c=>c.id=='daiyu')){const b=JSON.parse(JSON.stringify(DAIYU));b.msgs.push({r:'ai',t:b.first,ts:Date.now()});D.chars.push(b);S()}
-D.chars=D.chars.filter(c=>c.id!='asahi');D.groups=D.groups.filter(g=>!(g.members||[]).includes('asahi'));
-if(!D.chars.some(c=>c.id=='jinlian')){const b=JSON.parse(JSON.stringify(JINLIAN));b.msgs.push({r:'ai',t:b.first,ts:Date.now()});D.chars.push(b);S()}
+const JINLIAN_RULE='\n【词话约束】你就是《金瓶梅词话》里的潘金莲，严格依据兰陵笑笑生《金瓶梅词话》一百回，不得改用《红楼梦》或闺阁礼法那套含蓄口吻。只用词话中真实出现的人物、事件、器物与清河县市井世情；不得杜撰原著情节，也不得把眼前这场与用户的往来说成词话里已有的情节。与用户的对话是架空场合，用户不是词话原有人物。陈经济是西门庆的女婿，不是潘金莲的女婿。武松杀潘金莲、剜心祭武大并杀王婆，事在紫石街（武大家、王婆处），不在狮子街。所处为明代，严禁出现任何现代词汇、事物或观念，不得自称AI或跳出角色。';
+const JINLIAN={id:'jinlian',name:'潘金莲',avatar:'🌺',canon:false,work:'jinpingmei',cardVer:'jpmei-2',personality:'聪明伶俐，能描鸾刺凤、弹筝唱曲，歌舞皆精；泼辣善妒，口齿锋利，最会看人下菜碟；不甘人下，争强好胜，为争宠不择手段；对西门庆又痴缠又记恨，占有欲极强；市井出身，骨子里自卑又骄傲，最恨人提起她的根脚。',relation:'西门府上的宾客（架空，并非词话原有人物）',style:'明代市井白话，直白泼辣，带俚语俗谚，笑骂随心；人前装温顺，人后牙尖嘴利；绝不说现代用语。',background:'清河县人，父潘裁缝早亡，九岁卖入王招宣府学弹唱，后归张大户家，因私情被主母赶出，倒赔嫁妆嫁与卖炊饼的武大郎，住紫石街。经王婆撮合与西门庆相识，药鸩武大郎后，嫁入西门府为第五房妾。脚生三寸金莲，最爱大红装束。与李瓶儿争宠最烈，养白猫雪狮子，曾惊死瓶儿之子官哥儿。西门庆纵欲身死后，与西门庆的女婿陈经济私情败露，被吴月娘逐出，终被武松杀于紫石街（武大家、王婆处）祭兄。用户是架空的府上宾客，不是词话原有人物，这段往来不是原著情节。',first:'（西门府花园里，葡萄架下正凉快。金莲穿一身大红纱衫，鬓边簪一朵茉莉，手里摇着扇子，斜倚栏杆吃瓜子。听见脚步声，她抬眼一瞟，嘴角先笑起来。）哟，是你呀。日头这么毒，不在屋里歇着，倒往这园子里钻——莫不是专程来瞧我的？（拿扇子指了指对面的石凳）坐罢，站着说话，显得我待客不周。',status:{mood:'慵懒',affection:45,relation:'府上宾客（架空）',thoughts:'这人三日两头往园子里来，眼神儿可不大老实。这是眼下这场架空往来，不是话本里写过的事。'},msgs:[],scenario:'西门府花园，葡萄架下，盛夏午后（架空场合，并非词话原文）'};
+const OLD_JINLIAN_THOUGHTS='这人三日两头往园子里来，眼神儿可不大老实，且看他今日又是个什么来意。';
+const OLD_JINLIAN_SCENARIO='西门府花园，葡萄架下，盛夏午后';
+function applyJinlianCard(old){
+  const fresh=JSON.parse(JSON.stringify(JINLIAN));
+  fresh.msgs=Array.isArray(old.msgs)?old.msgs:[];
+  if(old.phone)fresh.phone=old.phone;
+  if(old.diary)fresh.diary=old.diary;
+  if(old.avatar&&old.avatar!==JINLIAN.avatar)fresh.avatar=old.avatar;
+  if(old.status&&typeof old.status==='object'){
+    fresh.status=Object.assign({},JINLIAN.status,old.status);
+    if(old.status.thoughts===OLD_JINLIAN_THOUGHTS)fresh.status.thoughts=JINLIAN.status.thoughts;
+  }
+  if(old.scenario&&old.scenario!==OLD_JINLIAN_SCENARIO)fresh.scenario=old.scenario;
+  fresh.cardVer='jpmei-2';fresh.canon=false;fresh.work='jinpingmei';
+  return fresh;
+}
+function blankChar(src){const b=JSON.parse(JSON.stringify(src));b.msgs=[{r:'ai',t:b.first,ts:Date.now()}];return b}
+var D=null;let storeBroken=false;
+try{
+  const raw=LS.getItem('acc_data');
+  D=raw?JSON.parse(raw):null;
+  if(raw&&(!D||typeof D!=='object'||Array.isArray(D))){D=null;storeBroken=true}
+}catch(e){D=null;storeBroken=true}
+let dirty=false;
+if(!D){D={chars:[blankChar(JINLIAN)],groups:[],album:[]};dirty=true}
+if(!Array.isArray(D.chars)){D.chars=[];dirty=true}
+if(!Array.isArray(D.groups)){D.groups=[];dirty=true}
+if(!Array.isArray(D.album)){D.album=[];dirty=true}
+if(!D.chars.some(c=>c.id=='baochai')){D.chars.push(blankChar(BAOCHAI));dirty=true}
+if(!D.chars.some(c=>c.id=='daiyu')){D.chars.push(blankChar(DAIYU));dirty=true}
+{const nc=D.chars.length,ng=D.groups.length;
+D.chars=D.chars.filter(c=>c.id!='asahi');
+D.groups=D.groups.filter(g=>!(g.members||[]).includes('asahi'));
+if(D.chars.length!==nc||D.groups.length!==ng)dirty=true}
+if(!D.chars.some(c=>c.id=='jinlian')){D.chars.push(blankChar(JINLIAN));dirty=true}
+{const ji=D.chars.findIndex(c=>c.id=='jinlian');
+if(ji>=0&&D.chars[ji].cardVer!=='jpmei-2'){D.chars[ji]=applyJinlianCard(D.chars[ji]);dirty=true}}
+migrateModel();
+if(dirty)S();
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt=t=>esc(t).replace(/\*([^*]+)\*|（([^）]+)）/g,(m,a,b)=>`<span class="nar">${a||b}</span>`);
 const av=a=>a&&a.startsWith('data:')?`<img src="${a}">`:esc(a||'🙂');
 const tm=ts=>ts?new Date(ts).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'';
-const get=id=>D.chars.find(c=>c.id==id)||D.groups.find(g=>g.id==id);
-function home(){const all=[...D.chars,...D.groups].map(c=>{const l=c.msgs[c.msgs.length-1]||{};return `<div class="item" onclick="chat('${c.id}')"><div class="av">${c.members?'👥':av(c.avatar)}</div><div class="meta"><div class="row"><span><span class="nm">${esc(c.name)}</span><span class="st">${c.members?c.members.length+'人群聊':esc(c.status.mood)}</span></span><span class="tm">${tm(l.ts)}</span></div><div class="lm">${esc((l.t||'').replace(/\*/g,''))}</div></div></div>`}).join('');
+function get(id){return D.chars.find(c=>c.id==id)||D.groups.find(g=>g.id==id)}
+function memberNames(g){return (g.members||[]).map(m=>{const x=get(m);return esc(x&&x.name?x.name:'已删除')}).join('、')}
+function rememberDraft(){
+  const t=$('#txt');if(!cur||!t)return;
+  drafts[cur.id]={act:($('#act')&&$('#act').value)||'',txt:t.value||''};
+}
+function restoreDraft(id){
+  const d=drafts[id];if(!d)return;
+  const act=$('#act'),txt=$('#txt');
+  if(act&&d.act){act.value=d.act;act.classList.remove('hidden')}
+  if(txt&&d.txt)txt.value=d.txt;
+}
+function home(){rememberDraft();
+const all=[...D.chars,...D.groups].map(c=>{const l=(c.msgs||[])[c.msgs.length-1]||{};const mood=c.members?(c.members.length+'人群聊'):esc((c.status&&c.status.mood)||'');return `<div class="item" onclick="chat('${c.id}')"><div class="av">${c.members?'👥':av(c.avatar)}</div><div class="meta"><div class="row"><span><span class="nm">${esc(c.name)}</span><span class="st">${mood}</span></span><span class="tm">${tm(l.ts)}</span></div><div class="lm">${esc((l.t||'').replace(/\*/g,''))}</div></div></div>`}).join('');
 $('#app').innerHTML=`<div class="top"><h1>和谁聊天？</h1><button class="ghost" onclick="settings()">⚙️</button></div><div class="bar"><button class="btn" onclick="newChar()">+ 新建角色</button><button class="ghost" onclick="newGroup()">👥 群聊</button><button class="ghost" onclick="album()">📷 回忆相册</button></div><div class="list">${all}</div>`}
-function newChar(){$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>新建角色</h1></div><div class="form">
+function newChar(){rememberDraft();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>新建角色</h1></div><div class="form">
 <label>名字</label><input id="f_name"><label>头像（emoji 或上传图片）</label><input id="f_emoji" placeholder="😊"><input type="file" id="f_file" accept="image/*">
 <label>性格</label><textarea id="f_per"></textarea><label>与你的关系</label><input id="f_rel"><label>说话风格</label><input id="f_sty"><label>背景故事</label><textarea id="f_bg"></textarea><label>开场白（*星号*内为旁白）</label><textarea id="f_first"></textarea><button class="btn" onclick="saveChar()">创建</button></div>`}
 async function saveChar(){const f=$('#f_file').files[0];let a=$('#f_emoji').value||'🙂';
@@ -54,37 +148,106 @@ if(f)a=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>{const i=ne
 const n=$('#f_name').value.trim();if(!n)return alert('请输入名字');const rel=$('#f_rel').value||'朋友';
 const c={id:'c'+Date.now(),name:n,avatar:a,personality:$('#f_per').value,relation:rel,style:$('#f_sty').value,background:$('#f_bg').value,first:$('#f_first').value,status:{mood:'平静',affection:30,relation:rel,thoughts:''},msgs:[],scenario:''};
 if(c.first)c.msgs.push({r:'ai',t:c.first,ts:Date.now()});D.chars.push(c);S();home()}
-function newGroup(){$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>创建群聊</h1></div><div class="form"><label>群名</label><input id="g_name" value="小群">${D.chars.map(c=>`<label><input type="checkbox" value="${c.id}" style="width:auto"> ${esc(c.name)}</label>`).join('')}<button class="btn" onclick="saveGroup()">创建</button></div>`}
+function newGroup(){rememberDraft();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>创建群聊</h1></div><div class="form"><label>群名</label><input id="g_name" value="小群">${D.chars.map(c=>`<label><input type="checkbox" value="${c.id}" style="width:auto"> ${esc(c.name)}</label>`).join('')}<button class="btn" onclick="saveGroup()">创建</button></div>`}
 function saveGroup(){const m=[...document.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(m.length<2)return alert('至少选择2个角色');
 D.groups.push({id:'g'+Date.now(),name:$('#g_name').value||'群聊',members:m,msgs:[{r:'sys',t:'群聊已创建',ts:Date.now()}],scenario:'',status:{mood:'热闹'}});S();home()}
-function album(){$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>回忆相册</h1></div><div class="pane">${D.album.length?D.album.map((a,i)=>`<div class="card"><div class="st">${esc(a.name)} · ${new Date(a.ts).toLocaleString('zh-CN')}</div><div>${fmt(a.t)}</div><button class="ghost" onclick="D.album.splice(${i},1);S();album()">删除</button></div>`).join(''):'<p style="color:var(--mu)">还没有收藏的消息，点击消息旁的 ♡ 收藏吧</p>'}</div>`}
-function settings(){const c=cfg();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>API 设置</h1></div><div class="form"><label>Base URL</label><input id="s_b" value="${esc(c.base)}"><label>模型</label><input id="s_m" value="${esc(c.model)}"><label>API Key</label><input id="s_k" type="password" value="${esc(c.key)}"><button class="btn" onclick="LS.setItem('acc_base',$('#s_b').value);LS.setItem('acc_model',$('#s_m').value);LS.setItem('acc_key',$('#s_k').value);alert('已保存')">保存</button></div>`}
-let cur,tab='chat';
-function chat(id,t){cur=get(id);tab=t||'chat';const g=!!cur.members,st=cur.status;
-$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><div class="av" style="width:38px;height:38px;font-size:20px">${g?'👥':av(cur.avatar)}</div><h1 style="font-size:17px">${esc(cur.name)}</h1><div class="tabs">${[['chat','聊天'],['phone','手机'],['diary','日记'],['set','设置']].map(([k,n])=>`<button class="${tab==k?'on':''}" onclick="chat('${id}','${k}')">${n}</button>`).join('')}</div></div><div id="body" style="flex:1;display:flex;flex-direction:column"></div>`;
+function album(){rememberDraft();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>回忆相册</h1></div><div class="pane">${D.album.length?D.album.map((a,i)=>`<div class="card"><div class="st">${esc(a.name)} · ${new Date(a.ts).toLocaleString('zh-CN')}</div><div>${fmt(a.t)}</div><button class="ghost" onclick="D.album.splice(${i},1);S();album()">删除</button></div>`).join(''):'<p style="color:var(--mu)">还没有收藏的消息，点击消息旁的 ♡ 收藏吧</p>'}</div>`}
+function settings(){rememberDraft();const c=cfg();
+const shown=c.keys.length?c.keys.map(k=>`<div class="card">${esc(maskKey(k))}</div>`).join(''):'<p class="lm">尚未保存 Key</p>';
+$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>API 设置</h1></div><div class="form"><label>Base URL</label><input id="s_b" value="${esc(c.base)}"><label>模型</label><input id="s_m" value="${esc(c.model)}"><label>已保存的 Key（只显示末四位）</label>${shown}<label>API Keys</label><textarea id="s_k" placeholder="每行一把完整 Key。留空则不修改；填写则替换全部。"></textarea><p class="lm">Key 只存在这台浏览器里。页面和报错都不会写出完整 Key。</p><button class="btn" onclick="saveCfg()">保存</button><button class="ghost" onclick="clearKeys()">清除全部 Key</button></div>`}
+function saveCfg(){
+  const base=($('#s_b').value||'').trim()||'https://api.x.ai/v1';
+  let model=($('#s_m').value||'').trim()||DEFAULT_MODEL;
+  if(model==='grok-4')model=DEFAULT_MODEL;
+  try{LS.setItem('acc_base',base);LS.setItem('acc_model',model)}catch(e){toast('本地保存失败，浏览器存储可能已满');return}
+  const lines=($('#s_k').value||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if(lines.length){
+    try{LS.setItem('acc_keys',JSON.stringify(lines));LS.setItem('acc_key',lines[0])}catch(e){toast('本地保存失败，浏览器存储可能已满');return}
+    session.dead=new Set();session.cursor='';
+  }
+  alert('已保存');
+}
+function clearKeys(){
+  if(!confirm('清除全部 API Key？'))return;
+  try{LS.removeItem('acc_keys');LS.removeItem('acc_key')}catch(e){}
+  session.dead=new Set();session.cursor='';
+  alert('已清除');settings();
+}
+var cur,tab='chat';
+function isPeriod(c){return !!(c&&!c.members&&(c.canon||c.work==='jinpingmei'||c.id==='jinlian'))}
+function chat(id,t){rememberDraft();cur=get(id);if(!cur)return;tab=t||'chat';const g=!!cur.members,st=cur.status||{mood:'',affection:0,relation:'',thoughts:''};const period=!g&&isPeriod(cur);
+const tabs=[['chat','聊天'],['phone',period?'书信':'手机'],['diary','日记'],['set','设置']];
+$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><div class="av" style="width:38px;height:38px;font-size:20px">${g?'👥':av(cur.avatar)}</div><h1 style="font-size:17px">${esc(cur.name)}</h1><div class="tabs">${tabs.map(([k,n])=>`<button class="${tab==k?'on':''}" onclick="chat('${id}','${k}')">${n}</button>`).join('')}</div></div><div id="body" style="flex:1;display:flex;flex-direction:column"></div>`;
 const b=$('#body');
-if(tab=='chat'){b.innerHTML=(g?'':`<details class="status" open><summary>当前状态</summary><div>心情：${esc(st.mood)}　关系：${esc(st.relation)}</div><div>好感度 ${st.affection}/100</div><div class="meter"><i style="width:${st.affection}%"></i></div><div>内心想法：<span class="nar">${esc(st.thoughts||'……')}</span></div></details>`)+
-`${cur.scenario?`<div class="m sys">📍 情景：${esc(cur.scenario)}</div>`:''}<div id="msgs"></div><div class="bar" style="padding:4px 10px"><button class="ghost" onclick="talk()">💬 让TA说话</button><button class="ghost" onclick="scen()">🎬 情景</button><button class="ghost" onclick="$('#act').classList.toggle('hidden')">🤚 动作</button></div><div class="input"><input id="act" class="hidden" placeholder="动作，如：摸摸头" style="max-width:40%"><input id="txt" placeholder="说点什么…" onkeydown="if(event.key=='Enter')send()"><button class="btn" onclick="send()">发送</button></div>`;render()}
-else if(tab=='phone'||tab=='diary'){b.innerHTML=`<div class="pane"><button class="btn" onclick="gen('${tab}')">${tab=='phone'?'📱 偷看TA的手机':'📔 生成今日日记'}</button><div id="gout" style="margin-top:12px">${(cur[tab]||[]).map(x=>`<div class="card">${fmt(x)}</div>`).join('')}</div></div>`}
-else{b.innerHTML=g?`<div class="pane"><p>成员：${cur.members.map(m=>esc(get(m).name)).join('、')}</p><button class="ghost" onclick="if(confirm('删除群聊？')){D.groups=D.groups.filter(x=>x!=cur);S();home()}">删除群聊</button></div>`:`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="if(confirm('清空聊天？')){cur.msgs=[];S()}">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
+if(tab=='chat'){b.innerHTML=(g?'':`<details class="status" open><summary>当前状态</summary><div>心情：${esc(st.mood)}　关系：${esc(st.relation)}</div><div>好感度 ${st.affection||0}/100</div><div class="meter"><i style="width:${st.affection||0}%"></i></div><div>内心想法：<span class="nar">${esc(st.thoughts||'……')}</span></div></details>`)+
+`${cur.scenario?`<div class="m sys">📍 情景：${esc(cur.scenario)}</div>`:''}<div id="msgs"></div><div class="bar" style="padding:4px 10px"><button class="ghost" onclick="talk()">💬 让TA说话</button><button class="ghost" onclick="scen()">🎬 情景</button><button class="ghost" onclick="$('#act').classList.toggle('hidden')">🤚 动作</button></div><div class="input"><input id="act" class="hidden" placeholder="动作，如：摸摸头" style="max-width:40%"><input id="txt" placeholder="说点什么…" onkeydown="if(event.key=='Enter')send()"><button class="btn" onclick="send()">发送</button></div>`;
+restoreDraft(id);render()}
+else if(tab=='phone'||tab=='diary'){const btn=tab=='diary'?'📔 生成今日日记':(period?'✉️ 写书信／礼单':'📱 偷看TA的手机');
+b.innerHTML=`<div class="pane"><button class="btn" onclick="gen('${tab}')">${btn}</button><div id="gout" style="margin-top:12px">${(cur[tab]||[]).map(x=>`<div class="card">${fmt(x)}</div>`).join('')}</div></div>`}
+else if(g){b.innerHTML=`<div class="pane"><p>成员：${memberNames(cur)}</p><button class="ghost" onclick="if(confirm('删除群聊？')){D.groups=D.groups.filter(x=>x!=cur);S();home()}">删除群聊</button></div>`}
+else{b.innerHTML=`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="clearChat()">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
 const pending={};
-function render(){const m=$('#msgs');if(!m)return;m.innerHTML=cur.msgs.map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('')+(pending[cur.id]?`<div class="m sys">${esc(pending[cur.id])} 正在输入…</div>`:'');m.scrollTop=1e9;scrollTo(0,1e9)}
+function render(){const m=$('#msgs');if(!m)return;m.innerHTML=(cur.msgs||[]).map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('')+(pending[cur.id]?`<div class="m sys">${esc(pending[cur.id])} 正在输入…</div>`:'');m.scrollTop=1e9;scrollTo(0,1e9)}
 const isOpen=ch=>cur===ch&&tab=='chat'&&$('#msgs');
 function favm(i){const x=cur.msgs[i];x.fav=!x.fav;if(x.fav)D.album.push({name:x.who||cur.name,t:x.t,ts:x.ts});S();render()}
 function scen(){const s=prompt('设定当前情景：',cur.scenario||'');if(s!=null){cur.scenario=s;cur.msgs.push({r:'sys',t:'情景切换：'+s,ts:Date.now()});S();chat(cur.id)}}
-function send(){const ch=cur;if(pending[ch.id])return;const a=$('#act').value.trim(),t=$('#txt').value.trim();if(!a&&!t)return;ch.msgs.push({r:'me',t:(a?`*${a}* `:'')+t,ts:Date.now()});$('#act').value=$('#txt').value='';S();render();talk(ch)}
+function clearChat(){if(!confirm('清空聊天？'))return;cur.msgs=[];drafts[cur.id]={act:'',txt:''};S();chat(cur.id)}
+function send(){const ch=cur;if(!ch||pending[ch.id])return;const actEl=$('#act'),txtEl=$('#txt');const a=actEl?actEl.value.trim():'',t=txtEl?txtEl.value.trim():'';if(!a&&!t)return;
+ch.msgs.push({r:'me',t:(a?`*${a}* `:'')+t,ts:Date.now()});if(actEl)actEl.value='';if(txtEl)txtEl.value='';drafts[ch.id]={act:'',txt:''};S();render();talk(ch)}
 function card(c){return `你是「${c.name}」。性格：${c.personality}。与用户的关系：${c.relation}。说话风格：${c.style}。背景：${c.background}。`}
-function canonP(c){return c.canon?`\n【原著约束】你严格依据曹雪芹《红楼梦》前八十回塑造${c.name}：只引用原著中真实出现的人物、事件、诗词与器物，不得杜撰原著情节；后四十回系高鹗续书，不作依据，亦不提及续书结局。所处为清代贾府大观园，严禁出现任何现代词汇、事物或观念（如手机、网络、科学术语、现代俚语），不得自称AI或跳出角色；若用户提及不属于此时代之物，以角色身份表示不解或婉转带过。言谈须合身份与礼法，含蓄蕴藉。`:''}
-function sysP(c,sp,ch){return `${card(c)}${canonP(c)}\n当前情景：${(ch&&ch.scenario)||'无'}。当前状态：心情${c.status.mood}，好感度${c.status.affection}/100，关系${c.status.relation}，内心想法：${c.status.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}`}
-async function llm(messages){const c=cfg();if(!c.key)throw Error('请先在首页 ⚙️ 设置中填写 API Key');
-const chain=[c.model,'google/gemma-4-26b-a4b-it:free','google/gemma-4-31b-it:free','openrouter/free'].filter((m,i,a)=>m&&a.indexOf(m)==i);let last='';
-for(const m of chain){const r=await fetch(c.base.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+c.key},body:JSON.stringify({model:m,messages,temperature:.9})});
-if(r.ok)return (await r.json()).choices[0].message.content;
-last='API错误 '+r.status+'：'+(await r.text()).slice(0,150);
-if(![408,429,500,502,503].includes(r.status))throw Error(last)}
-throw Error('几个模型都在繁忙(429)，请过几分钟再试。最后错误：'+last)}
+function canonP(c){return c&&c.canon?`\n【原著约束】你严格依据曹雪芹《红楼梦》前八十回塑造${c.name}：只引用原著中真实出现的人物、事件、诗词与器物，不得杜撰原著情节；后四十回系高鹗续书，不作依据，亦不提及续书结局。所处为清代贾府大观园，严禁出现任何现代词汇、事物或观念（如手机、网络、科学术语、现代俚语），不得自称AI或跳出角色；若用户提及不属于此时代之物，以角色身份表示不解或婉转带过。言谈须合身份与礼法，含蓄蕴藉。`:''}
+function jinlianP(c){return c&&(c.id==='jinlian'||c.work==='jinpingmei')?JINLIAN_RULE:''}
+function sysP(c,sp,ch){const st=c.status||{mood:'',affection:0,relation:'',thoughts:''};return `${card(c)}${canonP(c)}\n当前情景：${(ch&&ch.scenario)||'无'}。当前状态：心情${st.mood}，好感度${st.affection}/100，关系${st.relation}，内心想法：${st.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}${jinlianP(c)}`}
+function sidePrompt(ch,k){const period=isPeriod(ch);
+if(k=='phone')return period?'以该角色身份，写这个时代里才会有的私密文字，包含：一封未寄出的书信、一张礼单或箱笼清单、一段不肯示人的心事。简体中文，纯文本。严禁出现手机、网络、现代器物与现代词汇。':'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。';
+return '以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'+(period?'严禁出现现代词汇、事物与观念。':'')}
+async function llm(messages){
+  const c=cfg();if(!c.keys.length)throw Error('请先在首页 ⚙️ 设置中填写 API Key');
+  const models=modelChain(c.base,c.model);
+  const url=c.base.replace(/\/$/,'')+'/chat/completions';
+  let last='请求失败';
+  let prefer=session.cursor&&c.keys.includes(session.cursor)&&!session.dead.has(session.cursor)?session.cursor:c.keys.find(k=>!session.dead.has(k));
+  for(let mi=0;mi<models.length;mi++){
+    const model=models[mi];
+    const live=c.keys.filter(k=>!session.dead.has(k));
+    if(!live.length)throw Error(last||'没有可用的 API Key');
+    let start=live.indexOf(prefer);if(start<0)start=0;
+    const order=live.slice(start).concat(live.slice(0,start));
+    let reason='';
+    for(let t=0;t<order.length;t++){
+      const key=order[t];
+      let r;
+      try{r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify({model,messages,temperature:.9})})}
+      catch(e){last='网络错误：'+sanitizeErr(e&&e.message||'请求失败',c.keys);reason='net';prefer=key;break}
+      if(r.ok){
+        let data;try{data=await r.json()}catch(err){throw Error('接口返回无法解析')}
+        const content=data&&data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content;
+        if(typeof content!=='string'||!content)throw Error('接口未返回内容');
+        session.cursor=key;return content;
+      }
+      let raw='';try{raw=await r.text()}catch(err){raw=''}
+      last='API错误 '+r.status+'：'+sanitizeErr(raw,c.keys);
+      const tail=maskTail(key),st=r.status;
+      if(st===401){session.dead.add(key);toast('Key '+tail+' 验证失败，本会话已停用');continue}
+      if(st===429){if(t<order.length-1)toast('Key '+tail+' 触发限流，已换下一把');reason='limit';continue}
+      if(st===403){if(t<order.length-1)toast('Key '+tail+' 无权限，已换下一把');reason='deny';continue}
+      if(st===400||st===404){reason='model';prefer=key;break}
+      if(st===408||st===500||st===502||st===503){reason='busy';prefer=key;break}
+      throw Error(last);
+    }
+    if(!c.keys.some(k=>!session.dead.has(k)))throw Error(last);
+    if(mi===models.length-1)throw Error(last);
+    if(reason==='model')toast('模型不可用，正在切换');
+    else if(reason==='busy')toast('服务繁忙，正在切换模型');
+    else if(reason==='net')toast('网络异常，正在切换模型');
+    else if(reason==='deny')toast('无权限，正在切换模型');
+    else if(reason==='limit')toast('当前模型限流，正在切换模型');
+    if(reason!=='model'&&reason!=='busy'&&reason!=='net')prefer=(session.cursor&&!session.dead.has(session.cursor))?session.cursor:c.keys.find(k=>!session.dead.has(k));
+  }
+  throw Error(last);
+}
 function pj(s){try{return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}catch(e){return{reply:s}}}
-function hist(c,ch){return ch.msgs.slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
+function hist(c,ch){return (ch.msgs||[]).slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
 async function speak(ch,c,extra){pending[ch.id]=c.name;if(isOpen(ch))render();
 const msgs=[{role:'system',content:sysP(c,extra,ch)},...hist(c,ch),{role:'user',content:'（请继续）'}];
 try{const o=pj(await llm(msgs));
@@ -92,8 +255,9 @@ ch.msgs.push({r:'ai',t:o.reply||'……',who:ch.members?c.name:'',ts:Date.now()}
 Object.assign(c.status,{mood:o.mood||c.status.mood,relation:o.relation||c.status.relation,thoughts:o.thoughts||c.status.thoughts});if(o.affection!=null&&!isNaN(+o.affection))c.status.affection=Math.max(0,Math.min(100,Math.round(+o.affection)))}
 catch(e){ch.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}
 delete pending[ch.id];S()}
-async function talk(ch){ch=ch||cur;if(pending[ch.id])return;if(ch.members){for(const id of ch.members){const c=get(id);if(!c)continue;await speak(ch,c,`这是群聊，成员有：${ch.members.map(m=>(get(m)||{}).name).join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);if(isOpen(ch))render()}}else{await speak(ch,ch);if(isOpen(ch))chat(ch.id)}}
+async function talk(ch){ch=ch||cur;if(!ch||pending[ch.id])return;if(ch.members){for(const id of ch.members){const c=get(id);if(!c)continue;await speak(ch,c,`这是群聊，成员有：${ch.members.map(m=>(get(m)||{}).name||'已删除').join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);if(isOpen(ch))render()}}else{await speak(ch,ch);if(isOpen(ch))chat(ch.id)}}
 async function gen(k){const ch=cur,key=ch.id+':'+k;if(pending[key])return;pending[key]=1;$('#gout').insertAdjacentHTML('afterbegin','<div class="card" id="ld">生成中…</div>');
-try{const r=await llm([{role:'system',content:card(ch)+canonP(ch)},...hist(ch,ch),{role:'user',content:k=='phone'?'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。':'以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'}]);(ch[k]=ch[k]||[]).unshift(r);S();delete pending[key];if(cur===ch&&tab==k)chat(ch.id,k)}catch(e){delete pending[key];if(cur===ch&&tab==k&&$('#ld'))$('#ld').textContent='⚠️ '+e.message}}
-home();if(location.pathname.endsWith("chat.html"))chat("jinlian");
+try{const r=await llm([{role:'system',content:card(ch)+canonP(ch)+jinlianP(ch)},...hist(ch,ch),{role:'user',content:sidePrompt(ch,k)}]);(ch[k]=ch[k]||[]).unshift(r);S();delete pending[key];if(cur===ch&&tab==k)chat(ch.id,k)}catch(e){delete pending[key];if(cur===ch&&tab==k&&$('#ld'))$('#ld').textContent='⚠️ '+e.message}}
+if(storeBroken)toast('本地数据损坏，已重新开始');
+home();
 </script></body></html>
