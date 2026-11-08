@@ -72,8 +72,12 @@ function card(c){return `你是「${c.name}」。性格：${c.personality}。与
 function canonP(c){return c.canon?`\n【原著约束】你严格依据曹雪芹《红楼梦》前八十回塑造${c.name}：只引用原著中真实出现的人物、事件、诗词与器物，不得杜撰原著情节；后四十回系高鹗续书，不作依据，亦不提及续书结局。所处为清代贾府大观园，严禁出现任何现代词汇、事物或观念（如手机、网络、科学术语、现代俚语），不得自称AI或跳出角色；若用户提及不属于此时代之物，以角色身份表示不解或婉转带过。言谈须合身份与礼法，含蓄蕴藉。`:''}
 function sysP(c,sp){return `${card(c)}${canonP(c)}\n当前情景：${cur.scenario||'无'}。当前状态：心情${c.status.mood}，好感度${c.status.affection}/100，关系${c.status.relation}，内心想法：${c.status.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}`}
 async function llm(messages){const c=cfg();if(!c.key)throw Error('请先在首页 ⚙️ 设置中填写 API Key');
-const r=await fetch(c.base.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+c.key},body:JSON.stringify({model:c.model,messages,temperature:.9})});
-if(!r.ok)throw Error('API错误 '+r.status+'：'+(await r.text()).slice(0,200));return (await r.json()).choices[0].message.content}
+const chain=[c.model,'google/gemma-4-26b-a4b-it:free','google/gemma-4-31b-it:free','openrouter/free'].filter((m,i,a)=>m&&a.indexOf(m)==i);let last='';
+for(const m of chain){const r=await fetch(c.base.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+c.key},body:JSON.stringify({model:m,messages,temperature:.9})});
+if(r.ok)return (await r.json()).choices[0].message.content;
+last='API错误 '+r.status+'：'+(await r.text()).slice(0,150);
+if(![408,429,500,502,503].includes(r.status))throw Error(last)}
+throw Error('几个模型都在繁忙(429)，请过几分钟再试。最后错误：'+last)}
 function pj(s){try{return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}catch(e){return{reply:s}}}
 function hist(c){return cur.msgs.slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
 async function speak(c,extra){const ph={r:'sys',t:c.name+' 正在输入…'};cur.msgs.push(ph);render();
