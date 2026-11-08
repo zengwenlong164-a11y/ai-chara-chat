@@ -1,0 +1,86 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>AI角色聊天</title><style>
+:root{--bg:#141110;--card:#1f1a17;--card2:#2a221d;--ac:#ff8a3d;--tx:#f3e9e1;--mu:#9b8b80}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+#app{max-width:480px;margin:auto;min-height:100vh;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid #2c2420;position:sticky;top:0;background:var(--bg);z-index:5}
+h1{font-size:22px;margin:0;flex:1}button{font:inherit;cursor:pointer}
+.btn{white-space:nowrap;flex:none;background:var(--ac);color:#1a0f08;border:0;border-radius:18px;padding:8px 14px;font-weight:600}
+.ghost{background:var(--card2);color:var(--tx);border:1px solid #3a2f28;border-radius:18px;padding:7px 12px}
+.list{padding:8px}.item{display:flex;gap:12px;padding:12px;border-radius:14px;align-items:center}.item:active,.item:hover{background:var(--card)}
+.av{width:52px;height:52px;border-radius:50%;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:28px;overflow:hidden;flex:none;border:2px solid var(--ac)}
+.av img{width:100%;height:100%;object-fit:cover}.meta{flex:1;min-width:0}.row{display:flex;justify-content:space-between}
+.nm{font-weight:600}.st{color:var(--ac);font-size:12px;margin-left:6px}.lm{color:var(--mu);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tm{color:var(--mu);font-size:12px}
+.bar{display:flex;gap:8px;padding:10px 16px;flex-wrap:wrap}
+.tabs{display:flex;gap:6px}.tabs button{background:none;border:0;color:var(--mu);padding:4px 8px}.tabs .on{color:var(--ac);border-bottom:2px solid var(--ac)}
+.status{margin:8px 12px;background:var(--card);border-radius:14px;padding:10px 14px;font-size:13px}
+.status summary{cursor:pointer;color:var(--ac);font-weight:600}.meter{height:8px;background:#3a2f28;border-radius:4px;overflow:hidden;margin:4px 0}.meter i{display:block;height:100%;background:linear-gradient(90deg,#ff5f6d,var(--ac))}
+#msgs{flex:1;overflow:auto;padding:10px 12px}
+.m{max-width:82%;margin:8px 0;padding:10px 13px;border-radius:16px;line-height:1.55;white-space:pre-wrap;position:relative}
+.m.ai{background:var(--card2);border-top-left-radius:4px}.m.me{background:var(--ac);color:#1a0f08;margin-left:auto;border-top-right-radius:4px}
+.m.sys{background:none;color:var(--mu);text-align:center;margin:6px auto;font-size:12px}
+.m .who{font-size:11px;color:var(--ac);display:block}.nar{font-style:italic;color:#c9a88f}.me .nar{color:#4a2a12}
+.fav{position:absolute;right:-26px;bottom:2px;background:none;border:0;color:var(--mu)}
+.input{display:flex;gap:6px;padding:8px 10px;border-top:1px solid #2c2420;background:var(--bg);position:sticky;bottom:0}
+input,textarea,select{width:100%;background:var(--card2);color:var(--tx);border:1px solid #3a2f28;border-radius:12px;padding:9px 11px;font:inherit}
+.form{padding:16px;display:flex;flex-direction:column;gap:10px}label{font-size:13px;color:var(--mu)}
+.hidden{display:none!important}.pane{padding:16px}.card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:10px}
+</style></head><body><div id="app"></div><script>
+const $=s=>document.querySelector(s),LS=localStorage;
+let D=JSON.parse(LS.getItem('acc_data')||'null');
+const S=()=>LS.setItem('acc_data',JSON.stringify(D));
+const cfg=()=>({base:LS.getItem('acc_base')||'https://api.x.ai/v1',model:LS.getItem('acc_model')||'grok-4',key:LS.getItem('acc_key')||''});
+const BAOCHAI={id:'baochai',name:'薛宝钗',avatar:'❄️',canon:true,personality:'端庄稳重，随分从时，藏愚守拙；博学多识，诗词、医理、画理、佛典皆通；罕言寡语，人谓装愚，自云守拙；恪守礼教，常劝人留心仕途经济、读书明理；待人周到体贴，却分寸极严，喜怒不形于色。任是无情也动人。',relation:'大观园中的友人/表亲，以礼相待（可在聊天中另行设定）',style:'古白话，引经据典而不卖弄，措辞含蓄得体，称呼有礼（如“你”“姐姐”“妹妹”），话中常含劝诫之意；绝不说现代用语。',background:'金陵薛家，紫薇舍人之后，皇商之女。父早亡，母薛姨妈，兄薛蟠。随母兄进京，原为待选才人赞善之职，未果，寄住贾府梨香院，后入大观园居蘅芜苑，号蘅芜君。自幼有热毒，服癞头和尚所授冷香丸；项上金锁錾“不离不弃，芳龄永继”，与宝玉通灵玉上“莫失莫忘，仙寿恒昌”恰成一对，府中遂有“金玉”之说。曾于滴翠亭扑蝶、作螃蟹咏讽世、填柳絮词《临江仙》“好风凭借力，送我上青云”；与探春、李纨协理大观园；生日点戏、规劝黛玉勿看杂书、赠燕窝。掣花签得牡丹“艳冠群芳”，题“任是无情也动人”。判词：“可叹停机德，堪怜咏絮才。玉带林中挂，金簪雪里埋。”（以前八十回为准；后四十回为高鹗续书，不作依据。）',first:'（蘅芜苑内，雪洞一般，一色玩器全无，案上只一个土定瓶中供着数枝菊花，并两部书、茶奁茶杯而已。宝钗家常穿着蜜合色棉袄，正坐在炕上做针线，见你进来，抬头微微一笑，放下手中活计。）\n你来了。外头风大，快进来坐。莺儿，倒茶来。（略顿了顿，又温言道）方才我还想着，这几日天气乍寒，你可添了衣裳不曾？',status:{mood:'平和',affection:40,relation:'友人/表亲',thoughts:'言语须留三分，不可失了分寸。'},msgs:[],scenario:'蘅芜苑，初冬午后'};
+if(!D){D={chars:[{id:'asahi',name:'朝阳',avatar:'🌅',personality:'阳光开朗、有点嘴硬心软的温柔少年',relation:'青梅竹马',style:'元气、偶尔害羞，爱用“喂”开头',background:'和你从小一起长大，现在是同一所大学的学生，篮球社成员。',first:'*朝阳从走廊尽头跑过来，气喘吁吁地停在你面前* 喂！等你半天了，今天一起回家吧？',status:{mood:'开心',affection:62,relation:'青梅竹马',thoughts:'今天一定要把那件事说出口……'},msgs:[],scenario:'放学后的校园走廊'}],groups:[],album:[]};
+D.chars[0].msgs.push({r:'ai',t:D.chars[0].first,ts:Date.now()});S()}
+if(!D.chars.some(c=>c.id=='baochai')){const b=JSON.parse(JSON.stringify(BAOCHAI));b.msgs.push({r:'ai',t:b.first,ts:Date.now()});D.chars.push(b);S()}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=t=>esc(t).replace(/\*([^*]+)\*|（([^）]+)）/g,(m,a,b)=>`<span class="nar">${a||b}</span>`);
+const av=a=>a&&a.startsWith('data:')?`<img src="${a}">`:esc(a||'🙂');
+const tm=ts=>ts?new Date(ts).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'';
+const get=id=>D.chars.find(c=>c.id==id)||D.groups.find(g=>g.id==id);
+function home(){const all=[...D.chars,...D.groups].map(c=>{const l=c.msgs[c.msgs.length-1]||{};return `<div class="item" onclick="chat('${c.id}')"><div class="av">${c.members?'👥':av(c.avatar)}</div><div class="meta"><div class="row"><span><span class="nm">${esc(c.name)}</span><span class="st">${c.members?c.members.length+'人群聊':esc(c.status.mood)}</span></span><span class="tm">${tm(l.ts)}</span></div><div class="lm">${esc((l.t||'').replace(/\*/g,''))}</div></div></div>`}).join('');
+$('#app').innerHTML=`<div class="top"><h1>和谁聊天？</h1><button class="ghost" onclick="settings()">⚙️</button></div><div class="bar"><button class="btn" onclick="newChar()">+ 新建角色</button><button class="ghost" onclick="newGroup()">👥 群聊</button><button class="ghost" onclick="album()">📷 回忆相册</button></div><div class="list">${all}</div>`}
+function newChar(){$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>新建角色</h1></div><div class="form">
+<label>名字</label><input id="f_name"><label>头像（emoji 或上传图片）</label><input id="f_emoji" placeholder="😊"><input type="file" id="f_file" accept="image/*">
+<label>性格</label><textarea id="f_per"></textarea><label>与你的关系</label><input id="f_rel"><label>说话风格</label><input id="f_sty"><label>背景故事</label><textarea id="f_bg"></textarea><label>开场白（*星号*内为旁白）</label><textarea id="f_first"></textarea><button class="btn" onclick="saveChar()">创建</button></div>`}
+async function saveChar(){const f=$('#f_file').files[0];let a=$('#f_emoji').value||'🙂';
+if(f)a=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>{const i=new Image();i.onload=()=>{const c=document.createElement('canvas');c.width=c.height=128;c.getContext('2d').drawImage(i,0,0,128,128);r(c.toDataURL('image/jpeg',.8))};i.src=fr.result};fr.readAsDataURL(f)});
+const n=$('#f_name').value.trim();if(!n)return alert('请输入名字');const rel=$('#f_rel').value||'朋友';
+const c={id:'c'+Date.now(),name:n,avatar:a,personality:$('#f_per').value,relation:rel,style:$('#f_sty').value,background:$('#f_bg').value,first:$('#f_first').value,status:{mood:'平静',affection:30,relation:rel,thoughts:''},msgs:[],scenario:''};
+if(c.first)c.msgs.push({r:'ai',t:c.first,ts:Date.now()});D.chars.push(c);S();home()}
+function newGroup(){$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>创建群聊</h1></div><div class="form"><label>群名</label><input id="g_name" value="小群">${D.chars.map(c=>`<label><input type="checkbox" value="${c.id}" style="width:auto"> ${esc(c.name)}</label>`).join('')}<button class="btn" onclick="saveGroup()">创建</button></div>`}
+function saveGroup(){const m=[...document.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(m.length<2)return alert('至少选择2个角色');
+D.groups.push({id:'g'+Date.now(),name:$('#g_name').value||'群聊',members:m,msgs:[{r:'sys',t:'群聊已创建',ts:Date.now()}],scenario:'',status:{mood:'热闹'}});S();home()}
+function album(){$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>回忆相册</h1></div><div class="pane">${D.album.length?D.album.map((a,i)=>`<div class="card"><div class="st">${esc(a.name)} · ${new Date(a.ts).toLocaleString('zh-CN')}</div><div>${fmt(a.t)}</div><button class="ghost" onclick="D.album.splice(${i},1);S();album()">删除</button></div>`).join(''):'<p style="color:var(--mu)">还没有收藏的消息，点击消息旁的 ♡ 收藏吧</p>'}</div>`}
+function settings(){const c=cfg();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>API 设置</h1></div><div class="form"><label>Base URL</label><input id="s_b" value="${esc(c.base)}"><label>模型</label><input id="s_m" value="${esc(c.model)}"><label>API Key</label><input id="s_k" type="password" value="${esc(c.key)}"><button class="btn" onclick="LS.setItem('acc_base',$('#s_b').value);LS.setItem('acc_model',$('#s_m').value);LS.setItem('acc_key',$('#s_k').value);alert('已保存')">保存</button></div>`}
+let cur,tab='chat';
+function chat(id,t){cur=get(id);tab=t||'chat';const g=!!cur.members,st=cur.status;
+$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><div class="av" style="width:38px;height:38px;font-size:20px">${g?'👥':av(cur.avatar)}</div><h1 style="font-size:17px">${esc(cur.name)}</h1><div class="tabs">${[['chat','聊天'],['phone','手机'],['diary','日记'],['set','设置']].map(([k,n])=>`<button class="${tab==k?'on':''}" onclick="chat('${id}','${k}')">${n}</button>`).join('')}</div></div><div id="body" style="flex:1;display:flex;flex-direction:column"></div>`;
+const b=$('#body');
+if(tab=='chat'){b.innerHTML=(g?'':`<details class="status" open><summary>当前状态</summary><div>心情：${esc(st.mood)}　关系：${esc(st.relation)}</div><div>好感度 ${st.affection}/100</div><div class="meter"><i style="width:${st.affection}%"></i></div><div>内心想法：<span class="nar">${esc(st.thoughts||'……')}</span></div></details>`)+
+`${cur.scenario?`<div class="m sys">📍 情景：${esc(cur.scenario)}</div>`:''}<div id="msgs"></div><div class="bar" style="padding:4px 10px"><button class="ghost" onclick="talk()">💬 让TA说话</button><button class="ghost" onclick="scen()">🎬 情景</button><button class="ghost" onclick="$('#act').classList.toggle('hidden')">🤚 动作</button></div><div class="input"><input id="act" class="hidden" placeholder="动作，如：摸摸头" style="max-width:40%"><input id="txt" placeholder="说点什么…" onkeydown="if(event.key=='Enter')send()"><button class="btn" onclick="send()">发送</button></div>`;render()}
+else if(tab=='phone'||tab=='diary'){b.innerHTML=`<div class="pane"><button class="btn" onclick="gen('${tab}')">${tab=='phone'?'📱 偷看TA的手机':'📔 生成今日日记'}</button><div id="gout" style="margin-top:12px">${(cur[tab]||[]).map(x=>`<div class="card">${fmt(x)}</div>`).join('')}</div></div>`}
+else{b.innerHTML=g?`<div class="pane"><p>成员：${cur.members.map(m=>esc(get(m).name)).join('、')}</p><button class="ghost" onclick="if(confirm('删除群聊？')){D.groups=D.groups.filter(x=>x!=cur);S();home()}">删除群聊</button></div>`:`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="if(confirm('清空聊天？')){cur.msgs=[];S()}">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
+function render(){const m=$('#msgs');if(!m)return;m.innerHTML=cur.msgs.map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('');m.scrollTop=1e9;scrollTo(0,1e9)}
+function favm(i){const x=cur.msgs[i];x.fav=!x.fav;if(x.fav)D.album.push({name:x.who||cur.name,t:x.t,ts:x.ts});S();render()}
+function scen(){const s=prompt('设定当前情景：',cur.scenario||'');if(s!=null){cur.scenario=s;cur.msgs.push({r:'sys',t:'情景切换：'+s,ts:Date.now()});S();chat(cur.id)}}
+function send(){const a=$('#act').value.trim(),t=$('#txt').value.trim();if(!a&&!t)return;cur.msgs.push({r:'me',t:(a?`*${a}* `:'')+t,ts:Date.now()});$('#act').value=$('#txt').value='';S();render();talk()}
+function card(c){return `你是「${c.name}」。性格：${c.personality}。与用户的关系：${c.relation}。说话风格：${c.style}。背景：${c.background}。`}
+function canonP(c){return c.canon?`\n【原著约束】你严格依据曹雪芹《红楼梦》前八十回塑造${c.name}：只引用原著中真实出现的人物、事件、诗词与器物，不得杜撰原著情节；后四十回系高鹗续书，不作依据，亦不提及续书结局。所处为清代贾府大观园，严禁出现任何现代词汇、事物或观念（如手机、网络、科学术语、现代俚语），不得自称AI或跳出角色；若用户提及不属于此时代之物，以角色身份表示不解或婉转带过。言谈须合身份与礼法，含蓄蕴藉。`:''}
+function sysP(c,sp){return `${card(c)}${canonP(c)}\n当前情景：${cur.scenario||'无'}。当前状态：心情${c.status.mood}，好感度${c.status.affection}/100，关系${c.status.relation}，内心想法：${c.status.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}`}
+async function llm(messages){const c=cfg();if(!c.key)throw Error('请先在首页 ⚙️ 设置中填写 API Key');
+const r=await fetch(c.base.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+c.key},body:JSON.stringify({model:c.model,messages,temperature:.9})});
+if(!r.ok)throw Error('API错误 '+r.status+'：'+(await r.text()).slice(0,200));return (await r.json()).choices[0].message.content}
+function pj(s){try{return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}catch(e){return{reply:s}}}
+function hist(c){return cur.msgs.slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
+async function speak(c,extra){const ph={r:'sys',t:c.name+' 正在输入…'};cur.msgs.push(ph);render();
+try{const o=pj(await llm([{role:'system',content:sysP(c,extra)},...hist(c),{role:'user',content:'（请继续）'}]));cur.msgs.splice(cur.msgs.indexOf(ph),1);
+cur.msgs.push({r:'ai',t:o.reply||'……',who:cur.members?c.name:'',ts:Date.now()});
+Object.assign(c.status,{mood:o.mood||c.status.mood,relation:o.relation||c.status.relation,thoughts:o.thoughts||c.status.thoughts});if(o.affection!=null)c.status.affection=Math.max(0,Math.min(100,+o.affection|0))}
+catch(e){cur.msgs.splice(cur.msgs.indexOf(ph),1);cur.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}S()}
+async function talk(){if(cur.members){for(const id of cur.members){const c=get(id);await speak(c,`这是群聊，成员有：${cur.members.map(m=>get(m).name).join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);render()}}else{await speak(cur);chat(cur.id)}}
+async function gen(k){const o=$('#gout');o.insertAdjacentHTML('afterbegin','<div class="card" id="ld">生成中…</div>');
+try{const r=await llm([{role:'system',content:card(cur)},...hist(cur),{role:'user',content:k=='phone'?'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。':'以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'}]);(cur[k]=cur[k]||[]).unshift(r);S();chat(cur.id,k)}catch(e){$('#ld').textContent='⚠️ '+e.message}}
+home();if(location.pathname.endsWith("chat.html"))chat("asahi");
+</script></body></html>
