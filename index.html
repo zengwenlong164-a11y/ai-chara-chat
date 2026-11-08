@@ -64,13 +64,15 @@ if(tab=='chat'){b.innerHTML=(g?'':`<details class="status" open><summary>当前�
 `${cur.scenario?`<div class="m sys">📍 情景：${esc(cur.scenario)}</div>`:''}<div id="msgs"></div><div class="bar" style="padding:4px 10px"><button class="ghost" onclick="talk()">💬 让TA说话</button><button class="ghost" onclick="scen()">🎬 情景</button><button class="ghost" onclick="$('#act').classList.toggle('hidden')">🤚 动作</button></div><div class="input"><input id="act" class="hidden" placeholder="动作，如：摸摸头" style="max-width:40%"><input id="txt" placeholder="说点什么…" onkeydown="if(event.key=='Enter')send()"><button class="btn" onclick="send()">发送</button></div>`;render()}
 else if(tab=='phone'||tab=='diary'){b.innerHTML=`<div class="pane"><button class="btn" onclick="gen('${tab}')">${tab=='phone'?'📱 偷看TA的手机':'📔 生成今日日记'}</button><div id="gout" style="margin-top:12px">${(cur[tab]||[]).map(x=>`<div class="card">${fmt(x)}</div>`).join('')}</div></div>`}
 else{b.innerHTML=g?`<div class="pane"><p>成员：${cur.members.map(m=>esc(get(m).name)).join('、')}</p><button class="ghost" onclick="if(confirm('删除群聊？')){D.groups=D.groups.filter(x=>x!=cur);S();home()}">删除群聊</button></div>`:`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="if(confirm('清空聊天？')){cur.msgs=[];S()}">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
-function render(){const m=$('#msgs');if(!m)return;m.innerHTML=cur.msgs.map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('');m.scrollTop=1e9;scrollTo(0,1e9)}
+const pending={};
+function render(){const m=$('#msgs');if(!m)return;m.innerHTML=cur.msgs.map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('')+(pending[cur.id]?`<div class="m sys">${esc(pending[cur.id])} 正在输入…</div>`:'');m.scrollTop=1e9;scrollTo(0,1e9)}
+const isOpen=ch=>cur===ch&&tab=='chat'&&$('#msgs');
 function favm(i){const x=cur.msgs[i];x.fav=!x.fav;if(x.fav)D.album.push({name:x.who||cur.name,t:x.t,ts:x.ts});S();render()}
 function scen(){const s=prompt('设定当前情景：',cur.scenario||'');if(s!=null){cur.scenario=s;cur.msgs.push({r:'sys',t:'情景切换：'+s,ts:Date.now()});S();chat(cur.id)}}
-function send(){const a=$('#act').value.trim(),t=$('#txt').value.trim();if(!a&&!t)return;cur.msgs.push({r:'me',t:(a?`*${a}* `:'')+t,ts:Date.now()});$('#act').value=$('#txt').value='';S();render();talk()}
+function send(){const ch=cur;if(pending[ch.id])return;const a=$('#act').value.trim(),t=$('#txt').value.trim();if(!a&&!t)return;ch.msgs.push({r:'me',t:(a?`*${a}* `:'')+t,ts:Date.now()});$('#act').value=$('#txt').value='';S();render();talk(ch)}
 function card(c){return `你是「${c.name}」。性格：${c.personality}。与用户的关系：${c.relation}。说话风格：${c.style}。背景：${c.background}。`}
 function canonP(c){return c.canon?`\n【原著约束】你严格依据曹雪芹《红楼梦》前八十回塑造${c.name}：只引用原著中真实出现的人物、事件、诗词与器物，不得杜撰原著情节；后四十回系高鹗续书，不作依据，亦不提及续书结局。所处为清代贾府大观园，严禁出现任何现代词汇、事物或观念（如手机、网络、科学术语、现代俚语），不得自称AI或跳出角色；若用户提及不属于此时代之物，以角色身份表示不解或婉转带过。言谈须合身份与礼法，含蓄蕴藉。`:''}
-function sysP(c,sp){return `${card(c)}${canonP(c)}\n当前情景：${cur.scenario||'无'}。当前状态：心情${c.status.mood}，好感度${c.status.affection}/100，关系${c.status.relation}，内心想法：${c.status.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}`}
+function sysP(c,sp,ch){return `${card(c)}${canonP(c)}\n当前情景：${(ch&&ch.scenario)||'无'}。当前状态：心情${c.status.mood}，好感度${c.status.affection}/100，关系${c.status.relation}，内心想法：${c.status.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}`}
 async function llm(messages){const c=cfg();if(!c.key)throw Error('请先在首页 ⚙️ 设置中填写 API Key');
 const chain=[c.model,'google/gemma-4-26b-a4b-it:free','google/gemma-4-31b-it:free','openrouter/free'].filter((m,i,a)=>m&&a.indexOf(m)==i);let last='';
 for(const m of chain){const r=await fetch(c.base.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+c.key},body:JSON.stringify({model:m,messages,temperature:.9})});
@@ -79,14 +81,16 @@ last='API错误 '+r.status+'：'+(await r.text()).slice(0,150);
 if(![408,429,500,502,503].includes(r.status))throw Error(last)}
 throw Error('几个模型都在繁忙(429)，请过几分钟再试。最后错误：'+last)}
 function pj(s){try{return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}catch(e){return{reply:s}}}
-function hist(c){return cur.msgs.slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
-async function speak(c,extra){const ph={r:'sys',t:c.name+' 正在输入…'};cur.msgs.push(ph);render();
-try{const o=pj(await llm([{role:'system',content:sysP(c,extra)},...hist(c),{role:'user',content:'（请继续）'}]));cur.msgs.splice(cur.msgs.indexOf(ph),1);
-cur.msgs.push({r:'ai',t:o.reply||'……',who:cur.members?c.name:'',ts:Date.now()});
-Object.assign(c.status,{mood:o.mood||c.status.mood,relation:o.relation||c.status.relation,thoughts:o.thoughts||c.status.thoughts});if(o.affection!=null)c.status.affection=Math.max(0,Math.min(100,+o.affection|0))}
-catch(e){cur.msgs.splice(cur.msgs.indexOf(ph),1);cur.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}S()}
-async function talk(){if(cur.members){for(const id of cur.members){const c=get(id);await speak(c,`这是群聊，成员有：${cur.members.map(m=>get(m).name).join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);render()}}else{await speak(cur);chat(cur.id)}}
-async function gen(k){const o=$('#gout');o.insertAdjacentHTML('afterbegin','<div class="card" id="ld">生成中…</div>');
-try{const r=await llm([{role:'system',content:card(cur)},...hist(cur),{role:'user',content:k=='phone'?'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。':'以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'}]);(cur[k]=cur[k]||[]).unshift(r);S();chat(cur.id,k)}catch(e){$('#ld').textContent='⚠️ '+e.message}}
+function hist(c,ch){return ch.msgs.slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
+async function speak(ch,c,extra){pending[ch.id]=c.name;if(isOpen(ch))render();
+const msgs=[{role:'system',content:sysP(c,extra,ch)},...hist(c,ch),{role:'user',content:'（请继续）'}];
+try{const o=pj(await llm(msgs));
+ch.msgs.push({r:'ai',t:o.reply||'……',who:ch.members?c.name:'',ts:Date.now()});
+Object.assign(c.status,{mood:o.mood||c.status.mood,relation:o.relation||c.status.relation,thoughts:o.thoughts||c.status.thoughts});if(o.affection!=null&&!isNaN(+o.affection))c.status.affection=Math.max(0,Math.min(100,Math.round(+o.affection)))}
+catch(e){ch.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}
+delete pending[ch.id];S()}
+async function talk(ch){ch=ch||cur;if(pending[ch.id])return;if(ch.members){for(const id of ch.members){const c=get(id);if(!c)continue;await speak(ch,c,`这是群聊，成员有：${ch.members.map(m=>(get(m)||{}).name).join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);if(isOpen(ch))render()}}else{await speak(ch,ch);if(isOpen(ch))chat(ch.id)}}
+async function gen(k){const ch=cur,key=ch.id+':'+k;if(pending[key])return;pending[key]=1;$('#gout').insertAdjacentHTML('afterbegin','<div class="card" id="ld">生成中…</div>');
+try{const r=await llm([{role:'system',content:card(ch)+canonP(ch)},...hist(ch,ch),{role:'user',content:k=='phone'?'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。':'以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'}]);(ch[k]=ch[k]||[]).unshift(r);S();delete pending[key];if(cur===ch&&tab==k)chat(ch.id,k)}catch(e){delete pending[key];if(cur===ch&&tab==k&&$('#ld'))$('#ld').textContent='⚠️ '+e.message}}
 home();if(location.pathname.endsWith("chat.html"))chat("asahi");
 </script></body></html>
