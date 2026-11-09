@@ -77,7 +77,10 @@ function boot(seed = {}) {
     prompt() { return null; },
     scrollTo() {},
     FileReader: class {},
-    Image: class {}
+    Image: class {},
+    TextDecoder,
+    TextEncoder,
+    Uint8Array
   };
   vm.createContext(ctx);
   vm.runInContext(script, ctx, { filename: 'index.html' });
@@ -546,5 +549,205 @@ assert.doesNotMatch(html, /几个模型都在繁忙/);
 assert.match(html, /maximum-scale=1/);
 assert.match(html, /google\/gemma-4-26b-a4b-it:free/);
 assert.match(html, /openrouter\/free/);
+
+function sseResponse(parts, status = 200) {
+  const enc = new TextEncoder();
+  let i = 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (name) => String(name).toLowerCase() === 'content-type' ? 'text/event-stream; charset=utf-8' : '' },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (i >= parts.length) return { done: true, value: undefined };
+            const part = parts[i++];
+            return { done: false, value: part instanceof Uint8Array ? part : enc.encode(part) };
+          }
+        };
+      }
+    },
+    json: async () => { throw new Error('not json'); },
+    text: async () => { throw new Error('not text'); }
+  };
+}
+
+// SSE split across chunks, including a multibyte character and a cut STATUS marker. [DONE] ends the stream.
+{
+  const enc = new TextEncoder();
+  const nihao = enc.encode('你好');
+  const pieces = [
+    enc.encode('data: {"choices":[{"delta":{"content":"'),
+    nihao.slice(0, 1),
+    nihao.slice(1),
+    enc.encode('"}}]}\n\ndata: {"choices":[{"delta":{"content":"<<<STA"}}]}\r\n\r\n'),
+    enc.encode('data: {"choices":[{"delta":{"content":"TUS>>>\\n{\\"mood\\":\\"喜\\",\\"affection\\":51,\\"relation\\":\\"友\\",\\"thoughts\\":\\"念\\"}"}}]}\n\n'),
+    'data: [DONE]\n\n'
+  ];
+  const seen = [];
+  const { ctx, byId } = boot({ acc_keys: JSON.stringify(['fake-stream-1111']) });
+  ctx.chat('jinlian');
+  let reads = 0;
+  const res = sseResponse(pieces);
+  const reader = res.body.getReader();
+  res.body.getReader = () => ({
+    async read() {
+      if (reads > 0) {
+        const htmlNow = byId.get('msgs') ? byId.get('msgs').innerHTML : '';
+        seen.push(htmlNow);
+      }
+      reads += 1;
+      return reader.read();
+    }
+  });
+  ctx.fetch = async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    assert.equal(body.stream, true);
+    assert.equal(body.model, 'grok-4.20-0309-non-reasoning');
+    return res;
+  };
+  await ctx.talk(ctx.get('jinlian'));
+  const jin = ctx.get('jinlian');
+  const last = jin.msgs[jin.msgs.length - 1];
+  assert.equal(last.t, '你好');
+  assert.equal(last.t.includes('<<<STATUS>>>'), false);
+  assert.equal(last.t.includes('affection'), false);
+  assert.equal(jin.status.affection, 51);
+  assert.equal(jin.status.mood, '喜');
+  assert.equal(seen.length > 0, true);
+  assert.equal(seen.some((htmlNow) => htmlNow.includes('你')), true);
+  assert.equal(seen.some((htmlNow) => htmlNow.includes('<<<STATUS>>>') || htmlNow.includes('affection')), false);
+  assert.equal(byId.get('msgs').innerHTML.includes('<<<STATUS>>>'), false);
+  assert.equal(byId.get('msgs').innerHTML.includes('你好'), true);
+}
+
+// A 429 before any text, then a stream on the next key. Only the second reply is saved.
+{
+  const k1 = 'fake-stream-aaaa', k2 = 'fake-stream-bbbb';
+  const { ctx } = boot({ acc_keys: JSON.stringify([k1, k2]) });
+  const calls = [];
+  ctx.fetch = async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    calls.push({ model: body.model, auth: opts.headers.Authorization, stream: body.stream });
+    if (calls.length === 1) return response(429, { text: 'slow ' + k1 });
+    return sseResponse(['data: {"choices":[{"delta":{"content":"第二把"}}]}\n\n', 'data: [DONE]\n']);
+  };
+  const raw = await ctx.llm([], (t) => { if (t && t.includes(k1)) throw new Error('preview leaked key'); });
+  assert.equal(raw, '第二把');
+  assert.deepEqual(calls.map((c) => c.model), ['grok-4.20-0309-non-reasoning', 'grok-4.20-0309-non-reasoning']);
+  assert.equal(calls[1].auth.endsWith('bbbb'), true);
+  assert.equal(calls[0].auth.includes(k1) && raw.includes(k1), false);
+}
+
+// Stream dies after a partial token. The partial is not saved; the next model reply is.
+{
+  const secret = 'fake-stream-SECRET';
+  const { ctx } = boot({ acc_keys: JSON.stringify([secret]) });
+  ctx.chat('jinlian');
+  let n = 0;
+  ctx.fetch = async () => {
+    n += 1;
+    if (n === 1) {
+      let i = 0;
+      const parts = ['data: {"choices":[{"delta":{"content":"半截"}}]}\n\n'];
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/event-stream' },
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (i === 0) { i = 1; return { done: false, value: new TextEncoder().encode(parts[0]) }; }
+                throw new Error('reset ' + secret);
+              }
+            };
+          }
+        }
+      };
+    }
+    return response(200, { content: '完整句\n<<<STATUS>>>\n{"mood":"平","affection":46,"relation":"友","thoughts":"稳"}' });
+  };
+  await ctx.talk(ctx.get('jinlian'));
+  const jin = ctx.get('jinlian');
+  const last = jin.msgs[jin.msgs.length - 1];
+  assert.equal(last.r, 'ai');
+  assert.equal(last.t, '完整句');
+  assert.equal(JSON.stringify(jin.msgs).includes('半截'), false);
+  assert.equal(JSON.stringify(jin).includes(secret), false);
+  assert.equal(n, 2);
+}
+
+// Provider returns ordinary JSON even though stream was requested.
+{
+  const { ctx } = boot({ acc_keys: JSON.stringify(['fake-json-1111']) });
+  const calls = [];
+  ctx.fetch = async (_url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      body: { getReader: () => { throw new Error('should use json'); } },
+      json: async () => ({ choices: [{ message: { content: '{"reply":"旧格式","mood":"平","affection":40,"relation":"友","thoughts":"念"}' } }] }),
+      text: async () => { throw new Error('no'); }
+    };
+  };
+  ctx.chat('baochai');
+  await ctx.talk(ctx.get('baochai'));
+  const bao = ctx.get('baochai');
+  const last = bao.msgs[bao.msgs.length - 1];
+  assert.equal(last.t, '旧格式');
+  assert.equal(last.t.includes('{'), false);
+  assert.equal(calls[0].stream, true);
+  assert.equal(bao.status.affection, 40);
+}
+
+// 400 that rejects stream falls back to a non-stream request on the same model.
+{
+  const { ctx } = boot({ acc_base: 'https://example.com/v1', acc_model: 'custom-model', acc_keys: JSON.stringify(['fake-nostream-1111']) });
+  const calls = [];
+  ctx.fetch = async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    calls.push(body);
+    if (body.stream) return response(400, { text: 'unrecognized argument stream' });
+    return response(200, { content: '退回整段' });
+  };
+  const text = await ctx.llm([{ role: 'user', content: 'hi' }]);
+  assert.equal(text, '退回整段');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].stream, true);
+  assert.equal(calls[1].stream, undefined);
+  assert.equal(calls[0].model, 'custom-model');
+  assert.equal(calls[1].model, 'custom-model');
+}
+
+// Diary keeps the raw completion, while the in-progress card never shows the status block.
+{
+  const { ctx, byId } = boot({ acc_keys: JSON.stringify(['fake-diary-1111']) });
+  ctx.chat('jinlian', 'diary');
+  const gout = byId.get('gout');
+  const previews = [];
+  gout.insertAdjacentHTML = function () {
+    const el = { id: 'ld', _tc: '' };
+    Object.defineProperty(el, 'textContent', {
+      get() { return this._tc; },
+      set(v) { this._tc = String(v); previews.push(this._tc); }
+    });
+    byId.set('ld', el);
+  };
+  ctx.fetch = async () => sseResponse([
+    'data: {"choices":[{"delta":{"content":"今日无事"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"<<<STATUS>>>{\\"mood\\":\\"懒\\"}"}}]}\n\n',
+    'data: [DONE]\n'
+  ]);
+  await ctx.gen('diary');
+  const saved = ctx.get('jinlian').diary[0];
+  assert.equal(saved.includes('今日无事'), true);
+  assert.equal(saved.includes('<<<STATUS>>>'), true);
+  assert.equal(previews.some((t) => t.includes('今日无事')), true);
+  assert.equal(previews.some((t) => t.includes('<<<STATUS>>>') || t.includes('mood')), false);
+}
 
 console.log('fallback-routing tests passed');

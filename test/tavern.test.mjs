@@ -71,6 +71,8 @@ function boot(seed = {}) {
     URL,
     atob,
     TextDecoder,
+    TextEncoder,
+    Uint8Array,
     localStorage,
     document,
     fetch: async () => { throw new Error('fetch not stubbed'); },

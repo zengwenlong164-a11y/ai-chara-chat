@@ -35,7 +35,7 @@ const DEFAULT_MODEL='grok-4.20-0309-non-reasoning';
 // 2f3dc99 的 OpenRouter 回退链只在 Base 为 OpenRouter 时使用；xAI 改走 xAI 模型。
 const OPENROUTER_FALLBACK=['google/gemma-4-26b-a4b-it:free','google/gemma-4-31b-it:free','openrouter/free'];
 const XAI_FALLBACK=['grok-4.20-0309-non-reasoning','grok-4.7'];
-const session={dead:new Set(),cursor:'',noFreq:false};
+const session={dead:new Set(),cursor:'',noFreq:false,noStream:false};
 let pendingImport=null;
 const drafts={};
 let toastTimer;
@@ -211,7 +211,8 @@ b.innerHTML=`<div class="pane"><button class="btn" onclick="gen('${tab}')">${btn
 else if(g){b.innerHTML=`<div class="pane"><p>成员：${memberNames(cur)}</p><button class="ghost" onclick="if(confirm('删除群聊？')){D.groups=D.groups.filter(x=>x!=cur);S();home()}">删除群聊</button></div>`}
 else{b.innerHTML=`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<label>世界书条目（关键词触发，命中后注入提示词）</label>${(cur.lorebook||[]).length?(cur.lorebook||[]).map((e,i)=>`<div class="card"><div>${esc((e.keys||[]).join('，'))}</div><div style="white-space:pre-wrap">${esc(e.content||'')}</div><button class="ghost" onclick="delLore(${i})">删除</button></div>`).join(''):'<p class="lm">暂无条目</p>'}<input id="l_keys" placeholder="关键词，用逗号分隔，如：冷香丸，金锁"><textarea id="l_content" placeholder="命中后注入的内容"></textarea><button class="ghost" onclick="addLore()">+ 添加条目</button><button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="clearChat()">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
 const pending={};
-function render(){const m=$('#msgs');if(!m)return;m.innerHTML=(cur.msgs||[]).map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('')+(pending[cur.id]?`<div class="m sys">${esc(pending[cur.id])} 正在输入…</div>`:'');m.scrollTop=1e9;scrollTo(0,1e9)}
+const live={},liveWho={};
+function render(){const m=$('#msgs');if(!m)return;const preview=live[cur.id]?`<div class="m ai">${liveWho[cur.id]?`<span class="who">${esc(liveWho[cur.id])}</span>`:''}${fmt(live[cur.id])}</div>`:'';m.innerHTML=(cur.msgs||[]).map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('')+preview+(pending[cur.id]?`<div class="m sys">${esc(pending[cur.id])} 正在输入…</div>`:'');m.scrollTop=1e9;scrollTo(0,1e9)}
 const isOpen=ch=>cur===ch&&tab=='chat'&&$('#msgs');
 function favm(i){const x=cur.msgs[i];x.fav=!x.fav;if(x.fav)D.album.push({name:x.who||cur.name,t:x.t,ts:x.ts});S();render()}
 function scen(){const s=prompt('设定当前情景：',cur.scenario||'');if(s!=null){cur.scenario=s;cur.msgs.push({r:'sys',t:'情景切换：'+s,ts:Date.now()});S();chat(cur.id)}}
@@ -225,7 +226,93 @@ function sysP(c,sp,ch){const st=c.status||{mood:'',affection:0,relation:'',thoug
 function sidePrompt(ch,k){const period=isPeriod(ch);
 if(k=='phone')return period?'以该角色身份，写这个时代里才会有的私密文字，包含：一封未寄出的书信、一张礼单或箱笼清单、一段不肯示人的心事。简体中文，纯文本。严禁出现手机、网络、现代器物与现代词汇。':'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。';
 return '以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'+(period?'严禁出现现代词汇、事物与观念。':'')}
-async function llm(messages){
+const STATUS_MARK='<<<STATUS>>>';
+function visibleStream(raw){
+  const s=String(raw||'');const i=s.indexOf(STATUS_MARK);let head=i>=0?s.slice(0,i):s;
+  if(i<0){for(let n=STATUS_MARK.length-1;n>0;n--){if(head.endsWith(STATUS_MARK.slice(0,n))){head=head.slice(0,-n);break}}}
+  if(/^\s*\{/.test(head))return '';
+  return head;
+}
+function contentFromJson(data){return data&&data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content}
+function takeDelta(payload,state){
+  if(!payload||payload==='[DONE]')return;
+  let j;try{j=JSON.parse(payload)}catch(e){return}
+  const choice=j&&j.choices&&j.choices[0];if(!choice)return;
+  const delta=choice.delta&&choice.delta.content;
+  if(typeof delta==='string'){if(delta)state.saw=true;state.raw+=delta;return}
+  const full=choice.message&&choice.message.content;
+  if(!state.saw&&typeof full==='string')state.raw=full;
+}
+function feedSse(state,chunk,onPreview){
+  state.carry+=chunk;let idx;
+  while((idx=state.carry.indexOf('\n'))>=0){
+    let line=state.carry.slice(0,idx);state.carry=state.carry.slice(idx+1);
+    if(line.endsWith('\r'))line=line.slice(0,-1);
+    if(!line.startsWith('data:'))continue;
+    const payload=line.slice(5).replace(/^ /,'');
+    if(payload==='[DONE]'){state.done=true;continue}
+    takeDelta(payload,state);
+    if(onPreview)onPreview(visibleStream(state.raw));
+  }
+}
+async function readSse(reader,onPreview){
+  const dec=new TextDecoder('utf-8'),state={carry:'',raw:'',saw:false,done:false};
+  while(!state.done){
+    const step=await reader.read();
+    if(step.done)break;
+    feedSse(state,dec.decode(step.value||new Uint8Array(),{stream:true}),onPreview);
+  }
+  feedSse(state,dec.decode(),onPreview);
+  if(state.carry.trim()){let line=state.carry.replace(/\r$/,'');if(line.startsWith('data:')){const payload=line.slice(5).replace(/^ /,'');if(payload!=='[DONE]')takeDelta(payload,state);if(onPreview)onPreview(visibleStream(state.raw))}}
+  if(!state.raw)throw Error('接口未返回内容');
+  return state.raw;
+}
+function finishLoose(text,onPreview){
+  const t=String(text||'').replace(/^\uFEFF/,'').trim();
+  if(t.startsWith('data:')||t.includes('\ndata:')){const state={carry:'',raw:'',saw:false,done:false};feedSse(state,t.endsWith('\n')?t:t+'\n',onPreview);if(!state.raw)throw Error('接口未返回内容');return state.raw}
+  let data;try{data=JSON.parse(t)}catch(e){throw Error('接口返回无法解析')}
+  const content=contentFromJson(data);
+  if(typeof content!=='string'||!content)throw Error('接口未返回内容');
+  if(onPreview)onPreview(visibleStream(content));
+  return content;
+}
+function takeReader(r){return r.body&&typeof r.body.getReader==='function'?r.body.getReader():null}
+async function readOk(r,onPreview){
+  const ctype=String(r.headers&&typeof r.headers.get==='function'?r.headers.get('content-type')||'':'').toLowerCase();
+  if(ctype.includes('event-stream')){const reader=takeReader(r);if(reader)return readSse(reader,onPreview);if(typeof r.text==='function')return finishLoose(await r.text(),onPreview)}
+  if(!ctype){const reader=takeReader(r);if(reader){
+    const dec=new TextDecoder('utf-8');let first='';
+    while(!first.trim()){
+      const step=await reader.read();if(step.done)break;
+      first+=dec.decode(step.value||new Uint8Array(),{stream:true});
+      if(first.length>12)break;
+    }
+    if(first.trimStart().startsWith('data:'))return readSseContinue(reader,dec,first,onPreview);
+    let rest=first;
+    while(true){const step=await reader.read();if(step.done)break;rest+=dec.decode(step.value||new Uint8Array(),{stream:true})}
+    rest+=dec.decode();
+    return finishLoose(rest,onPreview);
+  }}
+  if(typeof r.json==='function'){
+    let data;try{data=await r.json()}catch(e){throw Error('接口返回无法解析')}
+    const content=contentFromJson(data);
+    if(typeof content!=='string'||!content)throw Error('接口未返回内容');
+    if(onPreview)onPreview(visibleStream(content));
+    return content;
+  }
+  if(typeof r.text==='function')return finishLoose(await r.text(),onPreview);
+  throw Error('接口返回无法解析');
+}
+async function readSseContinue(reader,dec,primed,onPreview){
+  const state={carry:'',raw:'',saw:false,done:false};
+  feedSse(state,primed,onPreview);
+  while(!state.done){const step=await reader.read();if(step.done)break;feedSse(state,dec.decode(step.value||new Uint8Array(),{stream:true}),onPreview)}
+  feedSse(state,dec.decode(),onPreview);
+  if(state.carry.trim()){let line=state.carry.replace(/\r$/,'');if(line.startsWith('data:')){const payload=line.slice(5).replace(/^ /,'');if(payload!=='[DONE]')takeDelta(payload,state);if(onPreview)onPreview(visibleStream(state.raw))}}
+  if(!state.raw)throw Error('接口未返回内容');
+  return state.raw;
+}
+async function llm(messages,onPreview){
   const c=cfg();if(!c.keys.length)throw Error('请先在首页 ⚙️ 设置中填写 API Key');
   const models=modelChain(c.base,c.model);
   const url=c.base.replace(/\/$/,'')+'/chat/completions';
@@ -233,21 +320,25 @@ async function llm(messages){
   let prefer=session.cursor&&c.keys.includes(session.cursor)&&!session.dead.has(session.cursor)?session.cursor:c.keys.find(k=>!session.dead.has(k));
   for(let mi=0;mi<models.length;mi++){
     const model=models[mi];
-    const live=c.keys.filter(k=>!session.dead.has(k));
-    if(!live.length)throw Error(last||'没有可用的 API Key');
-    let start=live.indexOf(prefer);if(start<0)start=0;
-    const order=live.slice(start).concat(live.slice(0,start));
+    const liveKeys=c.keys.filter(k=>!session.dead.has(k));
+    if(!liveKeys.length)throw Error(last||'没有可用的 API Key');
+    let start=liveKeys.indexOf(prefer);if(start<0)start=0;
+    const order=liveKeys.slice(start).concat(liveKeys.slice(0,start));
     let reason='';
     for(let t=0;t<order.length;t++){
       const key=order[t];
+      if(onPreview)onPreview('');
       let r;
-      const body={model,messages,temperature:c.temp};if(c.freq>0&&!session.noFreq)body.frequency_penalty=c.freq;
+      const body={model,messages,temperature:c.temp};if(c.freq>0&&!session.noFreq)body.frequency_penalty=c.freq;if(!session.noStream)body.stream=true;
       try{r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)})}
-      catch(e){last='网络错误：'+sanitizeErr(e&&e.message||'请求失败',c.keys);reason='net';prefer=key;break}
+      catch(e){if(onPreview)onPreview('');last='网络错误：'+sanitizeErr(e&&e.message||'请求失败',c.keys);reason='net';prefer=key;break}
       if(r.ok){
-        let data;try{data=await r.json()}catch(err){throw Error('接口返回无法解析')}
-        const content=data&&data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content;
-        if(typeof content!=='string'||!content)throw Error('接口未返回内容');
+        let content;try{content=await readOk(r,onPreview)}
+        catch(err){
+          if(onPreview)onPreview('');
+          if(err&&(err.message==='接口返回无法解析'||err.message==='接口未返回内容'))throw err;
+          last='网络错误：'+sanitizeErr(err&&err.message||'请求失败',c.keys);reason='net';prefer=key;break;
+        }
         session.cursor=key;return content;
       }
       let raw='';try{raw=await r.text()}catch(err){raw=''}
@@ -255,6 +346,7 @@ async function llm(messages){
       const tail=maskTail(key),st=r.status;
       // 参数不支持时原地重试；模型类 400 仍走原有分流，保留基线行为。
       if(st===400&&body.frequency_penalty!==undefined&&!session.noFreq&&/frequency[_ -]?penalty|重复惩罚/i.test(raw)){session.noFreq=true;toast('当前服务商不支持重复惩罚参数，已自动关闭');t--;continue}
+      if(st===400&&body.stream&&!session.noStream&&/stream/i.test(raw)){session.noStream=true;t--;continue}
       if(st===401){session.dead.add(key);toast('Key '+tail+' 验证失败，本会话已停用');continue}
       if(st===429){if(t<order.length-1)toast('Key '+tail+' 触发限流，已换下一把');reason='limit';continue}
       if(st===403){if(t<order.length-1)toast('Key '+tail+' 无权限，已换下一把');reason='deny';continue}
@@ -338,17 +430,18 @@ function delLore(i){document.querySelectorAll('[data-k]').forEach(e=>cur[e.datas
 
 function pj(s){try{return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}catch(e){return{reply:s}}}
 function hist(c,ch){return (ch.msgs||[]).slice(-cfg().ctxN).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
-async function speak(ch,c,extra){pending[ch.id]=c.name;if(isOpen(ch))render();
+async function speak(ch,c,extra){pending[ch.id]=c.name;liveWho[ch.id]=ch.members?c.name:'';if(isOpen(ch))render();
 const msgs=[{role:'system',content:sysP(c,extra,ch)},...hist(c,ch),{role:'user',content:'（请继续）'}];
-try{const o=parseReply(await llm(msgs));
+try{const raw=await llm(msgs,t=>{if(t)live[ch.id]=t;else delete live[ch.id];if(isOpen(ch))render()});delete live[ch.id];
+const o=parseReply(raw);
 ch.msgs.push({r:'ai',t:o.reply,who:ch.members?c.name:'',ts:Date.now()});
 if(o.status&&typeof o.status==='object'){const oStatus=o.status;c.status=c.status||{};
 Object.assign(c.status,{mood:oStatus.mood||c.status.mood,relation:oStatus.relation||c.status.relation,thoughts:oStatus.thoughts||c.status.thoughts});if(oStatus.affection!=null&&!isNaN(+oStatus.affection))c.status.affection=Math.max(0,Math.min(100,Math.round(+oStatus.affection)))}}
-catch(e){ch.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}
-delete pending[ch.id];S()}
+catch(e){delete live[ch.id];ch.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}
+delete pending[ch.id];delete liveWho[ch.id];S()}
 async function talk(ch){ch=ch||cur;if(!ch||pending[ch.id])return;if(ch.members){for(const id of ch.members){const c=get(id);if(!c)continue;await speak(ch,c,`这是群聊，成员有：${ch.members.map(m=>(get(m)||{}).name||'已删除').join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);if(isOpen(ch))render()}}else{await speak(ch,ch);if(isOpen(ch))chat(ch.id)}}
 async function gen(k){const ch=cur,key=ch.id+':'+k;if(pending[key])return;pending[key]=1;$('#gout').insertAdjacentHTML('afterbegin','<div class="card" id="ld">生成中…</div>');
-try{const r=await llm([{role:'system',content:card(ch)+canonP(ch)+jinlianP(ch)},...hist(ch,ch),{role:'user',content:sidePrompt(ch,k)}]);(ch[k]=ch[k]||[]).unshift(r);S();delete pending[key];if(cur===ch&&tab==k)chat(ch.id,k)}catch(e){delete pending[key];if(cur===ch&&tab==k&&$('#ld'))$('#ld').textContent='⚠️ '+e.message}}
+try{const r=await llm([{role:'system',content:card(ch)+canonP(ch)+jinlianP(ch)},...hist(ch,ch),{role:'user',content:sidePrompt(ch,k)}],t=>{const el=$('#ld');if(el)el.textContent=t||'生成中…'});(ch[k]=ch[k]||[]).unshift(r);S();delete pending[key];if(cur===ch&&tab==k)chat(ch.id,k)}catch(e){delete pending[key];if(cur===ch&&tab==k&&$('#ld'))$('#ld').textContent='⚠️ '+e.message}}
 if(storeBroken)toast('本地数据损坏，已重新开始');
 home();
 </script></body></html>
