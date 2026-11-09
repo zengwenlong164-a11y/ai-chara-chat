@@ -422,7 +422,7 @@ assert.doesNotMatch(html, /几个模型都在繁忙/);
   assert.equal(byId.get('body').innerHTML.includes('偷看TA的手机'), true);
 }
 
-// Saved jinlian cards migrate; asahi and groups that contain asahi are removed; chat text stays.
+// Saved jinlian cards migrate. Asahi leaves the character list, but a group that included Asahi keeps its messages.
 {
   const old = {
     chars: [
@@ -436,13 +436,20 @@ assert.doesNotMatch(html, /几个模型都在繁忙/);
       },
       { id: 'asahi', name: '朝阳', avatar: '🌅', msgs: [{ r: 'ai', t: '朝阳的话', ts: 1 }], status: { mood: '开心' } }
     ],
-    groups: [{ id: 'g-asahi', name: '有朝阳', members: ['asahi', 'jinlian'], msgs: [{ r: 'me', t: '群里的话', ts: 1 }], status: { mood: '热闹' } }],
-    album: []
+    groups: [{ id: 'g-asahi', name: '有朝阳', members: ['asahi', 'jinlian'], msgs: [{ r: 'me', t: '群里的话', ts: 1 }, { r: 'ai', t: '朝阳在群里说的', who: '朝阳', ts: 2 }], status: { mood: '热闹' } }],
+    album: [{ name: '朝阳', t: '相册一句', ts: 3 }]
   };
-  const { ctx } = boot({ acc_data: JSON.stringify(old) });
+  const raw = JSON.stringify(old);
+  const { ctx, localStorage } = boot({ acc_data: raw });
   const jin = ctx.get('jinlian');
+  const group = ctx.D.groups.find((g) => g.id === 'g-asahi');
   assert.equal(ctx.get('asahi'), undefined);
-  assert.equal(ctx.D.groups.some((g) => (g.members || []).includes('asahi')), false);
+  assert.ok(group);
+  assert.equal(group.members.join(','), 'asahi,jinlian');
+  assert.equal(group.msgs.map((m) => m.t).join('|'), '群里的话|朝阳在群里说的');
+  assert.equal(ctx.D.album[0].t, '相册一句');
+  assert.equal(localStorage.getItem('acc_data_premigrate'), raw);
+  assert.equal(JSON.parse(localStorage.getItem('acc_data')).groups[0].msgs.length, 2);
   assert.equal(jin.msgs.some((m) => m.t === '保留这条'), true);
   assert.equal(jin.status.affection, 77);
   assert.equal(jin.status.mood, '怒');
@@ -455,6 +462,54 @@ assert.doesNotMatch(html, /几个模型都在繁忙/);
   assert.equal(jin.canon, false);
 }
 
+// A card already migrated to jpmei-2 keeps the user's own text and chat.
+{
+  const kept = {
+    chars: [{ id: 'jinlian', cardVer: 'jpmei-2', name: '潘金莲', personality: '用户改过', background: '用户背景', scenario: '用户情景', msgs: [{ r: 'me', t: '不要覆盖', ts: 1 }], status: { mood: '怒', affection: 80, relation: '旧', thoughts: '用户想法' }, avatar: '🌺', lorebook: [], examples: '', sysExtra: '' }],
+    groups: [],
+    album: []
+  };
+  const { ctx } = boot({ acc_data: JSON.stringify(kept) });
+  const jin = ctx.get('jinlian');
+  assert.equal(jin.personality, '用户改过');
+  assert.equal(jin.background, '用户背景');
+  assert.equal(jin.scenario, '用户情景');
+  assert.equal(jin.msgs[0].t, '不要覆盖');
+  assert.equal(jin.status.affection, 80);
+}
+
+// A null character entry must not abort startup.
+{
+  const { ctx } = boot({ acc_data: JSON.stringify({ chars: [null, { id: 'note', name: '便条', msgs: [{ r: 'me', t: '还在', ts: 1 }], status: { mood: '平静' } }], groups: [null], album: [null, { name: '甲', t: '一句', ts: 1 }] }) });
+  assert.equal(ctx.get('jinlian').name, '潘金莲');
+  assert.equal(ctx.get('note').msgs[0].t, '还在');
+  assert.equal(ctx.D.groups.length, 0);
+  assert.equal(ctx.D.album.length, 1);
+}
+
+// Longer keys are redacted before shorter prefixes, so no full key or leftover suffix remains.
+{
+  const { ctx } = boot();
+  const short = 'fake-prefix';
+  const long = 'fake-prefix-TAIL9999';
+  const cleaned = ctx.sanitizeErr('err ' + long + ' and ' + short, [short, long]);
+  assert.equal(cleaned.includes(long), false);
+  assert.equal(cleaned.includes(short), false);
+  assert.equal(cleaned.includes('TAIL9999'), false);
+}
+
+// Broken image reads reject instead of hanging, and the form can be submitted again.
+{
+  const readFail = boot();
+  readFail.ctx.FileReader = class { readAsDataURL() { this.onerror(); } };
+  await assert.rejects(readFail.ctx.readAvatar({}), (e) => e.message.includes('图片读取失败'));
+  const decodeFail = boot();
+  decodeFail.ctx.FileReader = class { readAsDataURL() { this.onload(); } };
+  decodeFail.ctx.Image = class { set src(_) { this.onerror(); } };
+  await assert.rejects(decodeFail.ctx.readAvatar({}), (e) => e.message.includes('图片解码失败'));
+  await assert.rejects(decodeFail.ctx.readAvatar({}), (e) => e.message.includes('请换一张后重试'));
+}
+
 // Corrupt localStorage does not blank the page. A full disk does not throw out of save.
 {
   const { ctx, toastLog } = boot({ acc_data: '{bad' });
@@ -465,5 +520,31 @@ assert.doesNotMatch(html, /几个模型都在繁忙/);
   assert.doesNotThrow(() => ctx.S());
   ctx.localStorage.setItem = orig;
 }
+
+// Group replies still update the shared character status. This is existing behavior, kept on purpose.
+{
+  const { ctx } = boot({ acc_keys: JSON.stringify(['fake-key-1111']) });
+  const jin = ctx.get('jinlian');
+  const before = jin.status.affection;
+  ctx.D.groups.push({ id: 'g-status', name: '群', members: ['jinlian'], msgs: [{ r: 'me', t: '群里一句', ts: 1 }], status: { mood: '热闹' } });
+  ctx.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    assert.equal(url, 'https://api.x.ai/v1/chat/completions');
+    assert.equal(body.model, 'grok-4.20-0309-non-reasoning');
+    assert.equal(body.frequency_penalty, 0.3);
+    assert.equal(body.temperature, 0.9);
+    return response(200, { content: '群回复\n<<<STATUS>>>\n{"mood":"怒","affection":90,"relation":"变了","thoughts":"想"}' });
+  };
+  await ctx.talk(ctx.get('g-status'));
+  assert.equal(before, 45);
+  assert.equal(jin.status.affection, 90);
+  assert.equal(jin.status.mood, '怒');
+  assert.equal(ctx.get('g-status').msgs.some((m) => m.t === '群回复'), true);
+  assert.equal(jin.msgs.some((m) => m.t === '群回复'), false);
+}
+
+assert.match(html, /maximum-scale=1/);
+assert.match(html, /google\/gemma-4-26b-a4b-it:free/);
+assert.match(html, /openrouter\/free/);
 
 console.log('fallback-routing tests passed');

@@ -67,7 +67,8 @@ function maskKey(k){k=String(k||'');return k.length<=4?'••••':'•••
 function maskTail(k){k=String(k||'');return k.length<=4?'••••':'…'+k.slice(-4)}
 function sanitizeErr(text,keys){
   let s=String(text||'');
-  (keys||[]).forEach(k=>{if(k&&k.length>3)s=s.split(k).join('***')});
+  const list=[...(keys||[])].map(k=>String(k||'')).filter(k=>k.length>3).sort((a,b)=>b.length-a.length);
+  for(const k of list){if(s.indexOf(k)>=0)s=s.split(k).join('***')}
   s=s.replace(/Bearer\s+\S+/gi,'Bearer ***').replace(/\s+/g,' ').trim();
   return s.slice(0,150);
 }
@@ -105,29 +106,44 @@ function applyJinlianCard(old){
   return fresh;
 }
 function blankChar(src){const b=JSON.parse(JSON.stringify(src));b.msgs=[{r:'ai',t:b.first,ts:Date.now()}];return b}
-var D=null;let storeBroken=false;
+var D=null;let storeBroken=false,rawSaved=null;
 try{
-  const raw=LS.getItem('acc_data');
-  D=raw?JSON.parse(raw):null;
-  if(raw&&(!D||typeof D!=='object'||Array.isArray(D))){D=null;storeBroken=true}
+  rawSaved=LS.getItem('acc_data');
+  D=rawSaved?JSON.parse(rawSaved):null;
+  if(rawSaved&&(!D||typeof D!=='object'||Array.isArray(D))){D=null;storeBroken=true}
 }catch(e){D=null;storeBroken=true}
 let dirty=false;
+try{
 if(!D){D={chars:[blankChar(JINLIAN)],groups:[],album:[]};dirty=true}
 if(!Array.isArray(D.chars)){D.chars=[];dirty=true}
 if(!Array.isArray(D.groups)){D.groups=[];dirty=true}
 if(!Array.isArray(D.album)){D.album=[];dirty=true}
+{const nC=D.chars.length,nG=D.groups.length,nA=D.album.length;
+D.chars=D.chars.filter(c=>c&&typeof c==='object'&&!Array.isArray(c));
+D.groups=D.groups.filter(g=>g&&typeof g==='object'&&!Array.isArray(g));
+D.album=D.album.filter(a=>a&&typeof a==='object'&&!Array.isArray(a));
+if(D.chars.length!==nC||D.groups.length!==nG||D.album.length!==nA)dirty=true}
 if(!D.chars.some(c=>c.id=='baochai')){D.chars.push(blankChar(BAOCHAI));dirty=true}
 if(!D.chars.some(c=>c.id=='daiyu')){D.chars.push(blankChar(DAIYU));dirty=true}
-{const nc=D.chars.length,ng=D.groups.length;
+{const nc=D.chars.length;
 D.chars=D.chars.filter(c=>c.id!='asahi');
-D.groups=D.groups.filter(g=>!(g.members||[]).includes('asahi'));
-if(D.chars.length!==nc||D.groups.length!==ng)dirty=true}
+if(D.chars.length!==nc)dirty=true}
 if(!D.chars.some(c=>c.id=='jinlian')){D.chars.push(blankChar(JINLIAN));dirty=true}
 {const ji=D.chars.findIndex(c=>c.id=='jinlian');
 if(ji>=0&&D.chars[ji].cardVer!=='jpmei-2'){D.chars[ji]=applyJinlianCard(D.chars[ji]);dirty=true}}
 D.chars.forEach(c=>{if(!Array.isArray(c.lorebook)){c.lorebook=[];dirty=true}for(const k of ['examples','sysExtra','scenario'])if(typeof c[k]!=='string'){c[k]='';dirty=true}});
 migrateModel();
-if(dirty)S();
+if(dirty){try{if(rawSaved&&LS.getItem('acc_data_premigrate')==null)LS.setItem('acc_data_premigrate',rawSaved)}catch(e){}S()}
+}catch(e){
+storeBroken=true;
+if(!D||typeof D!=='object'||Array.isArray(D))D={chars:[],groups:[],album:[]};
+if(!Array.isArray(D.chars))D.chars=[];
+if(!Array.isArray(D.groups))D.groups=[];
+if(!Array.isArray(D.album))D.album=[];
+D.chars=D.chars.filter(c=>c&&typeof c==='object'&&!Array.isArray(c));
+D.groups=D.groups.filter(g=>g&&typeof g==='object'&&!Array.isArray(g));
+if(!D.chars.some(c=>c.id=='jinlian')){try{D.chars.push(blankChar(JINLIAN))}catch(err){}}
+}
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt=t=>esc(t).replace(/\*([^*]+)\*|（([^）]+)）/g,(m,a,b)=>`<span class="nar">${a||b}</span>`);
 const av=a=>a&&a.startsWith('data:')?`<img src="${a}">`:esc(a||'🙂');
@@ -150,9 +166,9 @@ $('#app').innerHTML=`<div class="top"><h1>和谁聊天？</h1><button class="gho
 function newChar(){rememberDraft();pendingImport=null;$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>新建角色</h1></div><div class="form">
 <label>名字</label><input id="f_name"><label>头像（emoji 或上传图片）</label><input id="f_emoji" placeholder="😊"><input type="file" id="f_file" accept="image/*">
 <label>性格</label><textarea id="f_per"></textarea><label>与你的关系</label><input id="f_rel"><label>说话风格</label><input id="f_sty"><label>背景故事</label><textarea id="f_bg"></textarea><label>开场白（*星号*内为旁白）</label><textarea id="f_first"></textarea><label>导入酒馆卡（SillyTavern）</label><input type="file" id="f_card" accept=".png,.json,image/png,application/json" onchange="importCard()"><p class="lm">选择.png 角色卡或.json 卡文件，自动填充上方字段；PNG 还会用作头像。</p><div id="f_imp" class="lm"></div><button class="btn" onclick="saveChar()">创建</button></div>`}
+function readAvatar(file){return new Promise((resolve,reject)=>{const fr=new FileReader();const fail=m=>reject(Error(m));fr.onerror=()=>fail('图片读取失败，请重试');fr.onload=()=>{const i=new Image();i.onerror=()=>fail('图片解码失败，请换一张后重试');i.onload=()=>{try{const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d');if(!g)return fail('图片处理失败，请重试');g.drawImage(i,0,0,128,128);resolve(c.toDataURL('image/jpeg',.8))}catch(e){fail('图片处理失败，请重试')}};i.src=fr.result};try{fr.readAsDataURL(file)}catch(e){fail('图片读取失败，请重试')}})}
 async function saveChar(){const f=$('#f_file').files[0];let a=$('#f_emoji').value||'🙂';
-if(pendingImport&&pendingImport.avatar)a=pendingImport.avatar;
-else if(f)a=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>{const i=new Image();i.onload=()=>{const c=document.createElement('canvas');c.width=c.height=128;c.getContext('2d').drawImage(i,0,0,128,128);r(c.toDataURL('image/jpeg',.8))};i.src=fr.result};fr.readAsDataURL(f)});
+try{if(pendingImport&&pendingImport.avatar)a=pendingImport.avatar;else if(f)a=await readAvatar(f)}catch(e){alert((e&&e.message)||'图片读取失败，请重试');return}
 const n=$('#f_name').value.trim();if(!n)return alert('请输入名字');const rel=$('#f_rel').value||'朋友';
 const c={id:'c'+Date.now(),name:n,avatar:a,personality:$('#f_per').value,relation:rel,style:$('#f_sty').value,background:$('#f_bg').value,first:$('#f_first').value,status:{mood:'平静',affection:30,relation:rel,thoughts:''},msgs:[],scenario:pendingImport?.scenario||'',examples:pendingImport?.examples||'',sysExtra:pendingImport?.sysExtra||'',lorebook:pendingImport?.lorebook||[],loreDepth:pendingImport?.loreDepth};
 if(c.first)c.msgs.push({r:'ai',t:c.first,ts:Date.now()});D.chars.push(c);pendingImport=null;S();home()}
