@@ -26,13 +26,17 @@ input,textarea,select{width:100%;background:var(--card2);color:var(--tx);border:
 .form{padding:16px;display:flex;flex-direction:column;gap:10px}label{font-size:13px;color:var(--mu)}
 .hidden{display:none!important}.pane{padding:16px}.card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:10px}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#2a221d;color:var(--tx);border:1px solid var(--ac);border-radius:12px;padding:8px 14px;font-size:13px;z-index:30;max-width:92vw;text-align:center}
+.rp-row{display:flex;align-items:center;gap:10px}
+.rp-row input[type=range]{flex:1;min-width:0;accent-color:#ff8a3d;background:transparent;border:0;padding:0;height:28px;cursor:pointer}
+.rp-row input[type=number]{width:72px;flex:none;text-align:center;padding:8px 6px}
 </style></head><body><div id="app"></div><script>
 const $=s=>document.querySelector(s),LS=localStorage;
 const DEFAULT_MODEL='grok-4.20-0309-non-reasoning';
 // 2f3dc99 的 OpenRouter 回退链只在 Base 为 OpenRouter 时使用；xAI 改走 xAI 模型。
 const OPENROUTER_FALLBACK=['google/gemma-4-26b-a4b-it:free','google/gemma-4-31b-it:free','openrouter/free'];
 const XAI_FALLBACK=['grok-4.20-0309-non-reasoning','grok-4.7'];
-const session={dead:new Set(),cursor:''};
+const session={dead:new Set(),cursor:'',noFreq:false};
+let pendingImport=null;
 const drafts={};
 let toastTimer;
 function toast(msg){
@@ -55,8 +59,10 @@ function cfg(){
   migrateModel();
   let model=LS.getItem('acc_model')||DEFAULT_MODEL;
   if(model==='grok-4')model=DEFAULT_MODEL;
-  return {base:LS.getItem('acc_base')||'https://api.x.ai/v1',model,keys:loadKeys()};
+  const temp=rpNumber(LS.getItem('acc_temp'),0.9,0,2),freq=rpNumber(LS.getItem('acc_freq'),0.3,0,1),ctxN=rpNumber(LS.getItem('acc_ctx'),30,10,100,true);
+  return {temp,freq,ctxN,base:LS.getItem('acc_base')||'https://api.x.ai/v1',model,keys:loadKeys()};
 }
+function rpNumber(v,f,min,max,int){const n=int?parseInt(v,10):parseFloat(v);return Number.isNaN(n)?f:Math.max(min,Math.min(max,n))}
 function maskKey(k){k=String(k||'');return k.length<=4?'••••':'••••'+k.slice(-4)}
 function maskTail(k){k=String(k||'');return k.length<=4?'••••':'…'+k.slice(-4)}
 function sanitizeErr(text,keys){
@@ -119,6 +125,7 @@ if(D.chars.length!==nc||D.groups.length!==ng)dirty=true}
 if(!D.chars.some(c=>c.id=='jinlian')){D.chars.push(blankChar(JINLIAN));dirty=true}
 {const ji=D.chars.findIndex(c=>c.id=='jinlian');
 if(ji>=0&&D.chars[ji].cardVer!=='jpmei-2'){D.chars[ji]=applyJinlianCard(D.chars[ji]);dirty=true}}
+D.chars.forEach(c=>{if(!Array.isArray(c.lorebook)){c.lorebook=[];dirty=true}for(const k of ['examples','sysExtra','scenario'])if(typeof c[k]!=='string'){c[k]='';dirty=true}});
 migrateModel();
 if(dirty)S();
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -140,26 +147,27 @@ function restoreDraft(id){
 function home(){rememberDraft();
 const all=[...D.chars,...D.groups].map(c=>{const l=(c.msgs||[])[c.msgs.length-1]||{};const mood=c.members?(c.members.length+'人群聊'):esc((c.status&&c.status.mood)||'');return `<div class="item" onclick="chat('${c.id}')"><div class="av">${c.members?'👥':av(c.avatar)}</div><div class="meta"><div class="row"><span><span class="nm">${esc(c.name)}</span><span class="st">${mood}</span></span><span class="tm">${tm(l.ts)}</span></div><div class="lm">${esc((l.t||'').replace(/\*/g,''))}</div></div></div>`}).join('');
 $('#app').innerHTML=`<div class="top"><h1>和谁聊天？</h1><button class="ghost" onclick="settings()">⚙️</button></div><div class="bar"><button class="btn" onclick="newChar()">+ 新建角色</button><button class="ghost" onclick="newGroup()">👥 群聊</button><button class="ghost" onclick="album()">📷 回忆相册</button></div><div class="list">${all}</div>`}
-function newChar(){rememberDraft();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>新建角色</h1></div><div class="form">
+function newChar(){rememberDraft();pendingImport=null;$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>新建角色</h1></div><div class="form">
 <label>名字</label><input id="f_name"><label>头像（emoji 或上传图片）</label><input id="f_emoji" placeholder="😊"><input type="file" id="f_file" accept="image/*">
-<label>性格</label><textarea id="f_per"></textarea><label>与你的关系</label><input id="f_rel"><label>说话风格</label><input id="f_sty"><label>背景故事</label><textarea id="f_bg"></textarea><label>开场白（*星号*内为旁白）</label><textarea id="f_first"></textarea><button class="btn" onclick="saveChar()">创建</button></div>`}
+<label>性格</label><textarea id="f_per"></textarea><label>与你的关系</label><input id="f_rel"><label>说话风格</label><input id="f_sty"><label>背景故事</label><textarea id="f_bg"></textarea><label>开场白（*星号*内为旁白）</label><textarea id="f_first"></textarea><label>导入酒馆卡（SillyTavern）</label><input type="file" id="f_card" accept=".png,.json,image/png,application/json" onchange="importCard()"><p class="lm">选择.png 角色卡或.json 卡文件，自动填充上方字段；PNG 还会用作头像。</p><div id="f_imp" class="lm"></div><button class="btn" onclick="saveChar()">创建</button></div>`}
 async function saveChar(){const f=$('#f_file').files[0];let a=$('#f_emoji').value||'🙂';
-if(f)a=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>{const i=new Image();i.onload=()=>{const c=document.createElement('canvas');c.width=c.height=128;c.getContext('2d').drawImage(i,0,0,128,128);r(c.toDataURL('image/jpeg',.8))};i.src=fr.result};fr.readAsDataURL(f)});
+if(pendingImport&&pendingImport.avatar)a=pendingImport.avatar;
+else if(f)a=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>{const i=new Image();i.onload=()=>{const c=document.createElement('canvas');c.width=c.height=128;c.getContext('2d').drawImage(i,0,0,128,128);r(c.toDataURL('image/jpeg',.8))};i.src=fr.result};fr.readAsDataURL(f)});
 const n=$('#f_name').value.trim();if(!n)return alert('请输入名字');const rel=$('#f_rel').value||'朋友';
-const c={id:'c'+Date.now(),name:n,avatar:a,personality:$('#f_per').value,relation:rel,style:$('#f_sty').value,background:$('#f_bg').value,first:$('#f_first').value,status:{mood:'平静',affection:30,relation:rel,thoughts:''},msgs:[],scenario:''};
-if(c.first)c.msgs.push({r:'ai',t:c.first,ts:Date.now()});D.chars.push(c);S();home()}
+const c={id:'c'+Date.now(),name:n,avatar:a,personality:$('#f_per').value,relation:rel,style:$('#f_sty').value,background:$('#f_bg').value,first:$('#f_first').value,status:{mood:'平静',affection:30,relation:rel,thoughts:''},msgs:[],scenario:pendingImport?.scenario||'',examples:pendingImport?.examples||'',sysExtra:pendingImport?.sysExtra||'',lorebook:pendingImport?.lorebook||[],loreDepth:pendingImport?.loreDepth};
+if(c.first)c.msgs.push({r:'ai',t:c.first,ts:Date.now()});D.chars.push(c);pendingImport=null;S();home()}
 function newGroup(){rememberDraft();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>创建群聊</h1></div><div class="form"><label>群名</label><input id="g_name" value="小群">${D.chars.map(c=>`<label><input type="checkbox" value="${c.id}" style="width:auto"> ${esc(c.name)}</label>`).join('')}<button class="btn" onclick="saveGroup()">创建</button></div>`}
 function saveGroup(){const m=[...document.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(m.length<2)return alert('至少选择2个角色');
 D.groups.push({id:'g'+Date.now(),name:$('#g_name').value||'群聊',members:m,msgs:[{r:'sys',t:'群聊已创建',ts:Date.now()}],scenario:'',status:{mood:'热闹'}});S();home()}
 function album(){rememberDraft();$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>回忆相册</h1></div><div class="pane">${D.album.length?D.album.map((a,i)=>`<div class="card"><div class="st">${esc(a.name)} · ${new Date(a.ts).toLocaleString('zh-CN')}</div><div>${fmt(a.t)}</div><button class="ghost" onclick="D.album.splice(${i},1);S();album()">删除</button></div>`).join(''):'<p style="color:var(--mu)">还没有收藏的消息，点击消息旁的 ♡ 收藏吧</p>'}</div>`}
 function settings(){rememberDraft();const c=cfg();
 const shown=c.keys.length?c.keys.map(k=>`<div class="card">${esc(maskKey(k))}</div>`).join(''):'<p class="lm">尚未保存 Key</p>';
-$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>API 设置</h1></div><div class="form"><label>Base URL</label><input id="s_b" value="${esc(c.base)}"><label>模型</label><input id="s_m" value="${esc(c.model)}"><label>已保存的 Key（只显示末四位）</label>${shown}<label>API Keys</label><textarea id="s_k" placeholder="每行一把完整 Key。留空则不修改；填写则替换全部。"></textarea><p class="lm">Key 只存在这台浏览器里。页面和报错都不会写出完整 Key。</p><button class="btn" onclick="saveCfg()">保存</button><button class="ghost" onclick="clearKeys()">清除全部 Key</button></div>`}
+$('#app').innerHTML=`<div class="top"><button class="ghost" onclick="home()">‹</button><h1>API 设置</h1></div><div class="form"><label>Base URL</label><input id="s_b" value="${esc(c.base)}"><label>模型</label><input id="s_m" value="${esc(c.model)}"><label>温度（0–2，越高越发散）</label><div class="rp-row"><input type="range" id="r_temp" min="0" max="2" step="0.1" value="${c.temp}" oninput="$('#s_temp').value=this.value"><input type="number" id="s_temp" step="0.1" min="0" max="2" value="${c.temp}" oninput="$('#r_temp').value=this.value"></div><label>重复惩罚（0–1，减少车轱辘话）</label><div class="rp-row"><input type="range" id="r_freq" min="0" max="1" step="0.05" value="${c.freq}" oninput="$('#s_freq').value=this.value"><input type="number" id="s_freq" step="0.05" min="0" max="1" value="${c.freq}" oninput="$('#r_freq').value=this.value"></div><label>上下文条数（10–100）</label><input type="number" id="s_ctx" step="1" min="10" max="100" value="${c.ctxN}"><label>已保存的 Key（只显示末四位）</label>${shown}<label>API Keys</label><textarea id="s_k" placeholder="每行一把完整 Key。留空则不修改；填写则替换全部。"></textarea><p class="lm">Key 只存在这台浏览器里。页面和报错都不会写出完整 Key。</p><button class="btn" onclick="saveCfg()">保存</button><button class="ghost" onclick="clearKeys()">清除全部 Key</button></div>`}
 function saveCfg(){
   const base=($('#s_b').value||'').trim()||'https://api.x.ai/v1';
   let model=($('#s_m').value||'').trim()||DEFAULT_MODEL;
   if(model==='grok-4')model=DEFAULT_MODEL;
-  try{LS.setItem('acc_base',base);LS.setItem('acc_model',model)}catch(e){toast('本地保存失败，浏览器存储可能已满');return}
+  try{LS.setItem('acc_base',base);LS.setItem('acc_model',model);LS.setItem('acc_temp',rpNumber($('#s_temp')?.value,0.9,0,2));LS.setItem('acc_freq',rpNumber($('#s_freq')?.value,0.3,0,1));LS.setItem('acc_ctx',rpNumber($('#s_ctx')?.value,30,10,100,true))}catch(e){toast('本地保存失败，浏览器存储可能已满');return}
   const lines=($('#s_k').value||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   if(lines.length){
     try{LS.setItem('acc_keys',JSON.stringify(lines));LS.setItem('acc_key',lines[0])}catch(e){toast('本地保存失败，浏览器存储可能已满');return}
@@ -185,7 +193,7 @@ restoreDraft(id);render()}
 else if(tab=='phone'||tab=='diary'){const btn=tab=='diary'?'📔 生成今日日记':(period?'✉️ 写书信／礼单':'📱 偷看TA的手机');
 b.innerHTML=`<div class="pane"><button class="btn" onclick="gen('${tab}')">${btn}</button><div id="gout" style="margin-top:12px">${(cur[tab]||[]).map(x=>`<div class="card">${fmt(x)}</div>`).join('')}</div></div>`}
 else if(g){b.innerHTML=`<div class="pane"><p>成员：${memberNames(cur)}</p><button class="ghost" onclick="if(confirm('删除群聊？')){D.groups=D.groups.filter(x=>x!=cur);S();home()}">删除群聊</button></div>`}
-else{b.innerHTML=`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="clearChat()">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
+else{b.innerHTML=`<div class="form">${['personality:性格','relation:关系','style:说话风格','background:背景'].map(x=>{const[k,n]=x.split(':');return `<label>${n}</label><textarea data-k="${k}">${esc(cur[k]||'')}</textarea>`}).join('')}<label>世界书条目（关键词触发，命中后注入提示词）</label>${(cur.lorebook||[]).length?(cur.lorebook||[]).map((e,i)=>`<div class="card"><div>${esc((e.keys||[]).join('，'))}</div><div style="white-space:pre-wrap">${esc(e.content||'')}</div><button class="ghost" onclick="delLore(${i})">删除</button></div>`).join(''):'<p class="lm">暂无条目</p>'}<input id="l_keys" placeholder="关键词，用逗号分隔，如：冷香丸，金锁"><textarea id="l_content" placeholder="命中后注入的内容"></textarea><button class="ghost" onclick="addLore()">+ 添加条目</button><button class="btn" onclick="document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);S();alert('已保存')">保存</button><button class="ghost" onclick="clearChat()">清空聊天记录</button><button class="ghost" onclick="if(confirm('删除角色？')){D.chars=D.chars.filter(x=>x!=cur);S();home()}">删除角色</button></div>`}}
 const pending={};
 function render(){const m=$('#msgs');if(!m)return;m.innerHTML=(cur.msgs||[]).map((x,i)=>`<div class="m ${x.r}">${x.who?`<span class="who">${esc(x.who)}</span>`:''}${fmt(x.t)}${x.r=='ai'?`<button class="fav" onclick="favm(${i})">${x.fav?'♥':'♡'}</button>`:''}</div>`).join('')+(pending[cur.id]?`<div class="m sys">${esc(pending[cur.id])} 正在输入…</div>`:'');m.scrollTop=1e9;scrollTo(0,1e9)}
 const isOpen=ch=>cur===ch&&tab=='chat'&&$('#msgs');
@@ -197,7 +205,7 @@ ch.msgs.push({r:'me',t:(a?`*${a}* `:'')+t,ts:Date.now()});if(actEl)actEl.value='
 function card(c){return `你是「${c.name}」。性格：${c.personality}。与用户的关系：${c.relation}。说话风格：${c.style}。背景：${c.background}。`}
 function canonP(c){return c&&c.canon?`\n【原著约束】你严格依据曹雪芹《红楼梦》前八十回塑造${c.name}：只引用原著中真实出现的人物、事件、诗词与器物，不得杜撰原著情节；后四十回系高鹗续书，不作依据，亦不提及续书结局。所处为清代贾府大观园，严禁出现任何现代词汇、事物或观念（如手机、网络、科学术语、现代俚语），不得自称AI或跳出角色；若用户提及不属于此时代之物，以角色身份表示不解或婉转带过。言谈须合身份与礼法，含蓄蕴藉。`:''}
 function jinlianP(c){return c&&(c.id==='jinlian'||c.work==='jinpingmei')?JINLIAN_RULE:''}
-function sysP(c,sp,ch){const st=c.status||{mood:'',affection:0,relation:'',thoughts:''};return `${card(c)}${canonP(c)}\n当前情景：${(ch&&ch.scenario)||'无'}。当前状态：心情${st.mood}，好感度${st.affection}/100，关系${st.relation}，内心想法：${st.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n只输出JSON：{"reply":"回复内容","mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}${jinlianP(c)}`}
+function sysP(c,sp,ch){const st=c.status||{mood:'',affection:0,relation:'',thoughts:''},lore=matchLore(c,ch);return `${card(c)}${canonP(c)}${c.sysExtra?'\n'+String(c.sysExtra):''}${lore?'\n\n'+lore:''}${c.examples?'\n\n'+String(c.examples):''}\n当前情景：${(ch&&ch.scenario)||'无'}。当前状态：心情${st.mood}，好感度${st.affection}/100，关系${st.relation}，内心想法：${st.thoughts}。\n请始终以角色身份用简体中文回复。动作/神态/环境旁白用（全角括号）或*星号*包裹，对白直接写。${sp||''}\n正文要求：直接写回复正文，正文里不要出现任何 JSON 或代码块。正文写完后，另起一行，单独写一行 <<<STATUS>>>，紧接着在下一行只输出一个 JSON（不要用代码块围栏）：{"mood":"心情","affection":0-100整数(根据互动合理增减，每次变化不超过±5),"relation":"关系","thoughts":"内心想法(用户看不到的真实想法)"}${jinlianP(c)}`}
 function sidePrompt(ch,k){const period=isPeriod(ch);
 if(k=='phone')return period?'以该角色身份，写这个时代里才会有的私密文字，包含：一封未寄出的书信、一张礼单或箱笼清单、一段不肯示人的心事。简体中文，纯文本。严禁出现手机、网络、现代器物与现代词汇。':'以该角色身份，虚构TA手机里最近的内容：3条聊天记录、2条备忘录、搜索记录，简体中文，纯文本。';
 return '以该角色身份写一篇今天的私密日记，提到与用户的互动和真实心情，简体中文，纯文本。'+(period?'严禁出现现代词汇、事物与观念。':'')}
@@ -217,7 +225,8 @@ async function llm(messages){
     for(let t=0;t<order.length;t++){
       const key=order[t];
       let r;
-      try{r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify({model,messages,temperature:.9})})}
+      const body={model,messages,temperature:c.temp};if(c.freq>0&&!session.noFreq)body.frequency_penalty=c.freq;
+      try{r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)})}
       catch(e){last='网络错误：'+sanitizeErr(e&&e.message||'请求失败',c.keys);reason='net';prefer=key;break}
       if(r.ok){
         let data;try{data=await r.json()}catch(err){throw Error('接口返回无法解析')}
@@ -228,6 +237,8 @@ async function llm(messages){
       let raw='';try{raw=await r.text()}catch(err){raw=''}
       last='API错误 '+r.status+'：'+sanitizeErr(raw,c.keys);
       const tail=maskTail(key),st=r.status;
+      // 参数不支持时原地重试；模型类 400 仍走原有分流，保留基线行为。
+      if(st===400&&body.frequency_penalty!==undefined&&!session.noFreq&&/frequency[_ -]?penalty|重复惩罚/i.test(raw)){session.noFreq=true;toast('当前服务商不支持重复惩罚参数，已自动关闭');t--;continue}
       if(st===401){session.dead.add(key);toast('Key '+tail+' 验证失败，本会话已停用');continue}
       if(st===429){if(t<order.length-1)toast('Key '+tail+' 触发限流，已换下一把');reason='limit';continue}
       if(st===403){if(t<order.length-1)toast('Key '+tail+' 无权限，已换下一把');reason='deny';continue}
@@ -246,13 +257,77 @@ async function llm(messages){
   }
   throw Error(last);
 }
+function parsePngCard(arrayBuffer){
+  const b=new Uint8Array(arrayBuffer),sig=[137,80,78,71,13,10,26,10];
+  if(!sig.every((v,i)=>b[i]===v))throw Error('不是有效的 PNG 文件');
+  const view=new DataView(b.buffer,b.byteOffset,b.byteLength),found={};
+  const latin=new TextDecoder('latin1');
+  for(let p=8;p<b.length;){
+    if(p+12>b.length)throw Error('PNG 数据不完整');
+    const n=view.getUint32(p),type=latin.decode(b.subarray(p+4,p+8));
+    if(n>b.length-p-12)throw Error('PNG 数据不完整');
+    if(type==='tEXt'){
+      const data=b.subarray(p+8,p+8+n),zero=data.indexOf(0);
+      if(zero>=0){const key=latin.decode(data.subarray(0,zero)).toLowerCase();if(key==='chara'||key==='ccv3')found[key]=latin.decode(data.subarray(zero+1))}
+    }
+    p+=n+12;if(type==='IEND')break;
+  }
+  const value=found.ccv3||found.chara;
+  if(!value)throw Error('这张 PNG 里没有角色卡数据（chara）');
+  return JSON.parse(new TextDecoder('utf-8').decode(Uint8Array.from(atob(value),c=>c.charCodeAt(0))));
+}
+function tavernToChar(j){
+  const d=j&&j.data&&typeof j.data==='object'?j.data:(j||{}),name=String(d.name||'').trim();
+  const macro=v=>String(v||'').replace(/\{\{char\}\}/gi,()=>name);
+  const book=d.character_book,entries=book&&Array.isArray(book.entries)?book.entries:[];
+  const result={name,personality:String(d.personality||''),background:String(d.description||''),scenario:macro(d.scenario),first:macro(d.first_mes),examples:macro(d.mes_example),sysExtra:[d.system_prompt,d.post_history_instructions].map(v=>String(v||'').trim()).filter(Boolean).join('\n'),lorebook:entries.filter(e=>e&&e.enabled!==false).map(e=>({keys:(Array.isArray(e.keys)?e.keys:Array.isArray(e.key)?e.key:[]).map(String),keys2:(Array.isArray(e.secondary_keys)?e.secondary_keys:[]).map(String),content:String(e.content||''),constant:!!e.constant})).filter(e=>e.content&&(e.keys.length||e.constant))};
+  if(book&&typeof book.scan_depth==='number'&&book.scan_depth>0)result.loreDepth=book.scan_depth;
+  return result;
+}
+function matchLore(c,ch){
+  if(!Array.isArray(c.lorebook))return '';
+  const text=((ch&&ch.msgs)||[]).slice(-(c.loreDepth||10)).map(m=>m.t||'').join('\n').toLowerCase();
+  const hit=keys=>keys.some(k=>{k=String(k).trim().toLowerCase();return k&&text.includes(k)});
+  return c.lorebook.filter(e=>e&&e.content&&(e.constant||(hit(Array.isArray(e.keys)?e.keys:[])&&(!Array.isArray(e.keys2)||!e.keys2.length||hit(e.keys2))))).map(e=>e.content).join('\n');
+}
+function parseReply(s){
+  s=String(s);const i=s.indexOf('<<<STATUS>>>');
+  if(i>=0){let status=null;try{const m=s.slice(i+12).match(/\{[\s\S]*\}/);const o=m&&JSON.parse(m[0]);if(o&&typeof o==='object'&&!Array.isArray(o))status=o}catch(e){}return {reply:s.slice(0,i).trim()||'……',status}}
+  const t=s.trim();if(t.startsWith('{')){
+    try{const o=JSON.parse(t.slice(0,t.lastIndexOf('}')+1));if(o&&typeof o==='object'&&Object.prototype.hasOwnProperty.call(o,'reply'))return {reply:String(o.reply||'……'),status:o}}catch(e){}
+    if(/^\{[\s\S]*\}$/.test(t))return {reply:'……',status:null};
+  }
+  return {reply:t||'……',status:null};
+}
+async function importCard(){
+  try{
+    const file=$('#f_card').files[0];if(!file)return;
+    const png=/\.png$/i.test(file.name)||file.type==='image/png',json=/\.json$/i.test(file.name)||file.type==='application/json';
+    if(!png&&!json)return alert('只支持.png 或.json 角色卡');
+    const t=tavernToChar(png?parsePngCard(await file.arrayBuffer()):JSON.parse(await file.text()));
+    if(!t.name)return alert('这张卡里没有角色名');
+    const imported={scenario:t.scenario,examples:t.examples,sysExtra:t.sysExtra,lorebook:t.lorebook,loreDepth:t.loreDepth};
+    if(png)imported.avatar=await new Promise((resolve,reject)=>{const fr=new FileReader();fr.onerror=()=>reject(Error('图片读取失败'));fr.onload=()=>{const i=new Image();i.onerror=()=>reject(Error('图片解码失败'));i.onload=()=>{try{const c=document.createElement('canvas');c.width=c.height=128;c.getContext('2d').drawImage(i,0,0,128,128);resolve(c.toDataURL('image/jpeg',.8))}catch(e){reject(e)}};i.src=fr.result};fr.readAsDataURL(file)});
+    $('#f_name').value=t.name;$('#f_per').value=t.personality;$('#f_bg').value=t.background;$('#f_first').value=t.first;pendingImport=imported;
+    $('#f_imp').textContent=`已导入「${t.name}」：世界书 ${t.lorebook.length} 条`+(t.examples?'・含示例对话':'')+(t.sysExtra?'・含附加指令':'');
+  }catch(e){alert('导入失败：'+e.message)}
+}
+function addLore(){
+  document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);
+  const keys=$('#l_keys').value.split(/[,，、]/).map(k=>k.trim()).filter(Boolean),content=$('#l_content').value.trim();
+  if(!content)return alert('请填写条目内容');if(!keys.length)return alert('请填写至少一个关键词');
+  if(!Array.isArray(cur.lorebook))cur.lorebook=[];cur.lorebook.push({keys,content});S();chat(cur.id,'set');
+}
+function delLore(i){document.querySelectorAll('[data-k]').forEach(e=>cur[e.dataset.k]=e.value);(cur.lorebook||[]).splice(i,1);S();chat(cur.id,'set')}
+
 function pj(s){try{return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}catch(e){return{reply:s}}}
-function hist(c,ch){return (ch.msgs||[]).slice(-30).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
+function hist(c,ch){return (ch.msgs||[]).slice(-cfg().ctxN).filter(x=>x.r!='sys').map(x=>({role:x.r=='me'?'user':(x.who&&x.who!=c.name?'user':'assistant'),content:x.r=='me'?'用户：'+x.t:(x.who?x.who+'：':'')+x.t}))}
 async function speak(ch,c,extra){pending[ch.id]=c.name;if(isOpen(ch))render();
 const msgs=[{role:'system',content:sysP(c,extra,ch)},...hist(c,ch),{role:'user',content:'（请继续）'}];
-try{const o=pj(await llm(msgs));
-ch.msgs.push({r:'ai',t:o.reply||'……',who:ch.members?c.name:'',ts:Date.now()});
-Object.assign(c.status,{mood:o.mood||c.status.mood,relation:o.relation||c.status.relation,thoughts:o.thoughts||c.status.thoughts});if(o.affection!=null&&!isNaN(+o.affection))c.status.affection=Math.max(0,Math.min(100,Math.round(+o.affection)))}
+try{const o=parseReply(await llm(msgs));
+ch.msgs.push({r:'ai',t:o.reply,who:ch.members?c.name:'',ts:Date.now()});
+if(o.status&&typeof o.status==='object'){const oStatus=o.status;c.status=c.status||{};
+Object.assign(c.status,{mood:oStatus.mood||c.status.mood,relation:oStatus.relation||c.status.relation,thoughts:oStatus.thoughts||c.status.thoughts});if(oStatus.affection!=null&&!isNaN(+oStatus.affection))c.status.affection=Math.max(0,Math.min(100,Math.round(+oStatus.affection)))}}
 catch(e){ch.msgs.push({r:'sys',t:'⚠️ '+e.message,ts:Date.now()})}
 delete pending[ch.id];S()}
 async function talk(ch){ch=ch||cur;if(!ch||pending[ch.id])return;if(ch.members){for(const id of ch.members){const c=get(id);if(!c)continue;await speak(ch,c,`这是群聊，成员有：${ch.members.map(m=>(get(m)||{}).name||'已删除').join('、')}和用户。只代表${c.name}发言，可与其他角色互动。`);if(isOpen(ch))render()}}else{await speak(ch,ch);if(isOpen(ch))chat(ch.id)}}
